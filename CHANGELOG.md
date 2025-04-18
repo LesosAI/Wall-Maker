@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.2] - 2024-03-19
+### Fixed
+- Fixed TypeError in detectEdges method related to constant variable assignment
+- Improved grayscale data handling in dark scene enhancement
+
 ## [1.0.1] - 2024-03-19
 ### Fixed
 - Scene#data deprecation warning for V10+ compatibility
