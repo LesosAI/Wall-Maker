@@ -1540,6 +1540,304 @@ class WallMaker {
             edges.push(currentEdge);
         }
     }
+
+    static groupEdgesIntoSegments(edges) {
+        const segments = [];
+        const visited = new Set();
+        
+        // Process each edge
+        for (let i = 0; i < edges.length; i++) {
+            if (visited.has(i)) continue;
+            
+            const currentEdge = edges[i];
+            const segment = {
+                points: [...currentEdge],
+                length: this.calculateSegmentLength(currentEdge),
+                angle: this.calculateSegmentAngle(currentEdge)
+            };
+            
+            visited.add(i);
+            
+            // Look for connecting edges
+            for (let j = 0; j < edges.length; j++) {
+                if (visited.has(j)) continue;
+                
+                const otherEdge = edges[j];
+                if (this.areEdgesConnected(segment, otherEdge)) {
+                    // Merge edges
+                    segment.points.push(...otherEdge);
+                    segment.length = this.calculateSegmentLength(segment.points);
+                    segment.angle = this.calculateSegmentAngle(segment.points);
+                    visited.add(j);
+                }
+            }
+            
+            segments.push(segment);
+        }
+        
+        return segments;
+    }
+
+    static calculateSegmentLength(points) {
+        let length = 0;
+        for (let i = 1; i < points.length; i++) {
+            const dx = points[i].x - points[i-1].x;
+            const dy = points[i].y - points[i-1].y;
+            length += Math.sqrt(dx * dx + dy * dy);
+        }
+        return length;
+    }
+
+    static calculateSegmentAngle(points) {
+        if (points.length < 2) return 0;
+        
+        // Use first and last point for primary direction
+        const dx = points[points.length - 1].x - points[0].x;
+        const dy = points[points.length - 1].y - points[0].y;
+        return Math.atan2(dy, dx);
+    }
+
+    static areEdgesConnected(segment, edge) {
+        const threshold = 5; // pixels
+        const segmentPoints = segment.points || segment;
+        
+        // Check if any points are close enough
+        for (const point1 of segmentPoints) {
+            for (const point2 of edge) {
+                const dx = point1.x - point2.x;
+                const dy = point1.y - point2.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < threshold) {
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+
+    static filterDecorativeElements(segments) {
+        return segments.filter(segment => {
+            // Calculate segment properties
+            const length = segment.length;
+            const pointCount = segment.points.length;
+            const density = pointCount / length;
+            
+            // Filter out segments that are too short or too dense
+            if (length < 20 || density > 0.5) {
+                return false;
+            }
+            
+            // Check for regular patterns that might indicate decoration
+            const patterns = this.analyzePatternRegularity(segment.points);
+            if (patterns.isRegular) {
+                return false;
+            }
+            
+            return true;
+        });
+    }
+
+    static analyzePatternRegularity(points) {
+        const distances = [];
+        const angles = [];
+        
+        // Calculate point-to-point distances and angles
+        for (let i = 1; i < points.length; i++) {
+            const dx = points[i].x - points[i-1].x;
+            const dy = points[i].y - points[i-1].y;
+            distances.push(Math.sqrt(dx * dx + dy * dy));
+            angles.push(Math.atan2(dy, dx));
+        }
+        
+        // Analyze distance regularity
+        const avgDistance = distances.reduce((a, b) => a + b, 0) / distances.length;
+        const distanceVariance = distances.reduce((acc, d) => acc + Math.pow(d - avgDistance, 2), 0) / distances.length;
+        
+        // Analyze angle regularity
+        const angleVariance = this.calculateAngleVariance(angles);
+        
+        return {
+            isRegular: distanceVariance < 2 && angleVariance < 0.1,
+            distanceVariance,
+            angleVariance
+        };
+    }
+
+    static calculateAngleVariance(angles) {
+        // Normalize angles to [0, PI]
+        const normalizedAngles = angles.map(a => ((a % Math.PI) + Math.PI) % Math.PI);
+        
+        // Calculate mean angle
+        const sumX = normalizedAngles.reduce((acc, a) => acc + Math.cos(2 * a), 0);
+        const sumY = normalizedAngles.reduce((acc, a) => acc + Math.sin(2 * a), 0);
+        const meanAngle = Math.atan2(sumY, sumX) / 2;
+        
+        // Calculate circular variance
+        return 1 - Math.sqrt(sumX * sumX + sumY * sumY) / angles.length;
+    }
+
+    static analyzeWallRelevance(segments, threshold) {
+        return segments.map(segment => {
+            // Calculate basic metrics
+            const length = segment.length;
+            const straightness = this.calculateStraightness(segment.points);
+            const continuity = this.calculateContinuity(segment.points);
+            
+            // Calculate relevance score
+            const relevanceScore = (
+                (length * 0.4) +
+                (straightness * 0.3) +
+                (continuity * 0.3)
+            ) / (0.4 + 0.3 + 0.3);
+            
+            return {
+                ...segment,
+                relevanceScore,
+                isRelevant: relevanceScore >= threshold
+            };
+        }).filter(segment => segment.isRelevant);
+    }
+
+    static calculateStraightness(points) {
+        if (points.length < 2) return 1;
+        
+        // Calculate end-to-end distance
+        const dx = points[points.length - 1].x - points[0].x;
+        const dy = points[points.length - 1].y - points[0].y;
+        const endToEndDistance = Math.sqrt(dx * dx + dy * dy);
+        
+        // Calculate actual path length
+        const pathLength = this.calculateSegmentLength(points);
+        
+        // Return ratio (1 = perfectly straight, < 1 = curved)
+        return endToEndDistance / pathLength;
+    }
+
+    static calculateContinuity(points) {
+        if (points.length < 3) return 1;
+        
+        let discontinuityCount = 0;
+        const angleThreshold = Math.PI / 8; // 22.5 degrees
+        
+        // Check for sharp angles
+        for (let i = 1; i < points.length - 1; i++) {
+            const angle1 = Math.atan2(
+                points[i].y - points[i-1].y,
+                points[i].x - points[i-1].x
+            );
+            const angle2 = Math.atan2(
+                points[i+1].y - points[i].y,
+                points[i+1].x - points[i].x
+            );
+            
+            const angleDiff = Math.abs(angle2 - angle1);
+            if (angleDiff > angleThreshold && angleDiff < Math.PI - angleThreshold) {
+                discontinuityCount++;
+            }
+        }
+        
+        // Return continuity score (1 = perfectly continuous, 0 = very discontinuous)
+        return Math.max(0, 1 - (discontinuityCount / points.length));
+    }
+
+    static mergeWallSegments(segments, options) {
+        const { minLength = 20, continuityPreference = 0.75 } = options;
+        const walls = [];
+        const visited = new Set();
+        
+        // Sort segments by length (process longer segments first)
+        segments.sort((a, b) => b.length - a.length);
+        
+        for (let i = 0; i < segments.length; i++) {
+            if (visited.has(i)) continue;
+            
+            const segment = segments[i];
+            if (segment.length < minLength) continue;
+            
+            const wall = {
+                start: segment.points[0],
+                end: segment.points[segment.points.length - 1],
+                length: segment.length
+            };
+            
+            visited.add(i);
+            
+            // Look for connecting segments
+            let modified;
+            do {
+                modified = false;
+                
+                for (let j = 0; j < segments.length; j++) {
+                    if (visited.has(j)) continue;
+                    
+                    const otherSegment = segments[j];
+                    if (this.canMergeWalls(wall, otherSegment, continuityPreference)) {
+                        this.mergeWallWithSegment(wall, otherSegment);
+                        visited.add(j);
+                        modified = true;
+                    }
+                }
+            } while (modified);
+            
+            walls.push(wall);
+        }
+        
+        return walls;
+    }
+
+    static canMergeWalls(wall, segment, continuityPreference) {
+        const threshold = 10; // pixels
+        const angleThreshold = Math.PI / 6; // 30 degrees
+        
+        // Check distance between endpoints
+        const d1 = this.pointDistance(wall.start, segment.points[0]);
+        const d2 = this.pointDistance(wall.start, segment.points[segment.points.length - 1]);
+        const d3 = this.pointDistance(wall.end, segment.points[0]);
+        const d4 = this.pointDistance(wall.end, segment.points[segment.points.length - 1]);
+        
+        if (Math.min(d1, d2, d3, d4) > threshold) {
+            return false;
+        }
+        
+        // Check angle between segments
+        const wallAngle = Math.atan2(wall.end.y - wall.start.y, wall.end.x - wall.start.x);
+        const segmentAngle = this.calculateSegmentAngle(segment.points);
+        const angleDiff = Math.abs(wallAngle - segmentAngle) % Math.PI;
+        
+        return angleDiff < angleThreshold || angleDiff > Math.PI - angleThreshold;
+    }
+
+    static mergeWallWithSegment(wall, segment) {
+        const points = [...segment.points];
+        const d1 = this.pointDistance(wall.start, points[0]);
+        const d2 = this.pointDistance(wall.start, points[points.length - 1]);
+        
+        // Determine which end of the wall to connect to
+        if (d1 < d2) {
+            if (this.pointDistance(wall.start, points[0]) < this.pointDistance(wall.end, points[0])) {
+                wall.start = points[points.length - 1];
+            } else {
+                wall.end = points[points.length - 1];
+            }
+        } else {
+            if (this.pointDistance(wall.start, points[points.length - 1]) < this.pointDistance(wall.end, points[points.length - 1])) {
+                wall.start = points[0];
+            } else {
+                wall.end = points[0];
+            }
+        }
+        
+        // Update wall length
+        wall.length = this.pointDistance(wall.start, wall.end);
+    }
+
+    static pointDistance(p1, p2) {
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
 }
 
 Hooks.once('init', () => {

@@ -1,12 +1,13 @@
 # Changelog
 
-## [1.0.3] - 2024-03-19
+## [1.0.3] - 2024-04-18
 ### Added
-- Enhanced grayscale data handling for better dark scene processing
-- Improved scene image handling for V12.7 compatibility
+- Improved image enhancement methods with better constant handling
+- Enhanced wall detection accuracy with optimized pattern recognition
+- Added additional error handling for edge cases
 ### Fixed
-- Additional improvements to edge detection algorithm
-- Updated documentation and language files
+- Resolved constant variable issues in image enhancement methods
+- Improved code organization and documentation
 
 ## [1.0.2] - 2024-03-19
 ### Fixed
