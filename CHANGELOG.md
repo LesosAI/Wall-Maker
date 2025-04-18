@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.3] - 2024-03-19
+### Added
+- Enhanced grayscale data handling for better dark scene processing
+- Improved scene image handling for V12.7 compatibility
+### Fixed
+- Additional improvements to edge detection algorithm
+- Updated documentation and language files
+
 ## [1.0.2] - 2024-03-19
 ### Fixed
 - Fixed TypeError in detectEdges method related to constant variable assignment
