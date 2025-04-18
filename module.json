@@ -4,7 +4,7 @@
     "description": "Automatically generates walls from scene background images using advanced edge detection and pattern recognition.",
     "version": "1.0.5",
     "compatibility": {
-        "minimum": "11",
+        "minimum": "12",
         "verified": "12.7",
         "maximum": "12"
     },

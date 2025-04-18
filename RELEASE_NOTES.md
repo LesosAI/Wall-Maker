@@ -1,56 +1,56 @@
-# Wall Maker v1.0.4 Release Notes
+# Wall Maker v1.0.5 Release Notes
 
 ## Overview
-Wall Maker v1.0.4 brings significant performance improvements and enhanced functionality to automatic wall generation in Foundry VTT. This release focuses on optimizing the edge detection process, improving memory management, and enhancing the overall stability of wall generation, particularly in challenging lighting conditions.
+Wall Maker v1.0.5 brings significant improvements to edge detection and processing capabilities, focusing on performance optimization and reliability. This release enhances the module's ability to handle various scene conditions while maintaining efficient processing speeds.
 
-## New Features
+## New Features and Improvements
 
 ### Enhanced Edge Detection
-- **WebGL Acceleration**: Implemented WebGL-based processing for significantly faster edge detection
-- **Configurable Processing Pipeline**: New options for fine-tuning the image processing workflow
-- **Chunk-based Processing**: Better handling of large scenes through optimized chunk-based image analysis
-- **Early Exit Conditions**: Improved performance through smart processing termination
+- **WebGL Shader Improvements**
+  - Improved error handling during shader compilation and program linking
+  - Enhanced performance for large-scale scene processing
+  - Better memory management during GPU operations
 
-### Image Enhancement Improvements
-- **Adaptive Histogram Equalization**: Better handling of dark and low-contrast scenes
-- **Exposure Compensation**: Improved detection in varying lighting conditions
-- **Pattern Recognition**: Enhanced detection of decorative elements and complex textures
+### Optimized Processing
+- **CPU-based Processing**
+  - Pre-calculated kernel offsets for faster edge detection
+  - Improved fallback mechanism when WebGL is unavailable
+  - Enhanced performance for systems without GPU acceleration
+
+### Advanced Detection Features
+- **Edge Direction Analysis**
+  - Added edge direction information for more accurate wall placement
+  - Improved detection of wall corners and intersections
+  - Better handling of complex architectural features
 
 ### Performance Optimizations
-- **Memory Usage**: Significantly reduced memory footprint during processing
-- **Processing Speed**: Faster wall generation through optimized algorithms
-- **Resource Management**: Better handling of system resources during large scene processing
-
-## Bug Fixes
-- Resolved memory leaks in image processing pipeline
-- Fixed stability issues when processing large scene images
-- Improved error handling in edge detection process
-- Better handling of wall detection in dark scenes
-- Enhanced noise reduction in edge detection
+- **Threshold Calculations**
+  - Enhanced sensitivity calculations for better edge detection
+  - Improved edge strength threshold adjustments
+  - More accurate wall detection in varying lighting conditions
 
 ## Installation
-1. Download the module from the release page
-2. Extract the zip file to your Foundry VTT modules directory
-3. Enable the module in your world's module settings
+1. In Foundry VTT, navigate to the Add-on Modules tab
+2. Click "Install Module"
+3. Search for "Wall Maker" or paste the following manifest URL:
+   ```
+   https://github.com/username/wall-maker/releases/download/v1.0.5/module.json
+   ```
 
 ## Compatibility
-- Foundry VTT: v11.x and v12.7
-- Requires no additional modules
-- Compatible with all standard map types and scene configurations
+- Foundry VTT Core Compatible Versions: v11 and v12.7
+- Requires no additional module dependencies
 
 ## Known Issues
-- Processing very large scenes (>8000x8000 pixels) may require additional memory
-- Some highly detailed textures may require manual sensitivity adjustment
-
-## Configuration Tips
-- For optimal performance in dark scenes, enable the adaptive histogram equalization option
-- Adjust sensitivity settings based on your map's contrast levels
-- Use the chunk size setting to balance between processing speed and memory usage
+- In extremely large scenes (>8000x8000 pixels), initial processing may take longer
+- Some systems may default to CPU processing if WebGL initialization fails
 
 ## Feedback and Support
-- Issues can be reported on our GitHub repository
-- Join our Discord community for support and discussions
-- Check the module documentation for detailed configuration guides
+- For bug reports: [GitHub Issues](https://github.com/username/wall-maker/issues)
+- For support: [Foundry VTT Discord](https://discord.gg/foundryvtt)
 
-## Acknowledgments
-Special thanks to the Foundry VTT community for their continued feedback and support in making Wall Maker better with each release. 
+## Credits
+Special thanks to all contributors and testers who helped improve this release.
+
+## License
+This module is licensed under the MIT License. See the LICENSE file for details. 

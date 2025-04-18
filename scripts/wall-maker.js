@@ -29,18 +29,14 @@ class WallMaker {
     }
 
     static registerSettings() {
-        // Update wall type choices to match v12.7 terminology while maintaining v11 compatibility
-        const wallTypeChoices = game.version >= "12" ? {
+        // Wall type choices for v12
+        const wallTypeChoices = {
             "regular": "WALLS.TypeRegular",
             "ethereal": "WALLS.TypeEthereal",
             "invisible": "WALLS.TypeInvisible",
             "terrain": "WALLS.TypeTerrain",
-            "sound": "WALLS.TypeSound"
-        } : {
-            "normal": "Normal",
-            "ethereal": "Ethereal",
-            "invisible": "Invisible",
-            "terrain": "Terrain"
+            "sound": "WALLS.TypeSound",
+            "door": "WALLS.TypeDoor"
         };
 
         game.settings.register(this.ID, this.SETTINGS.SENSITIVITY, {
@@ -92,7 +88,7 @@ class WallMaker {
             config: true,
             type: String,
             choices: wallTypeChoices,
-            default: game.version >= "12" ? "regular" : "normal"
+            default: "regular"
         });
 
         game.settings.register(this.ID, this.SETTINGS.DARK_SCENE_ENHANCEMENT, {
@@ -350,7 +346,7 @@ class WallMaker {
             await this.createWalls(walls, currentScene);
 
             progressBar.advance("Finalizing...");
-            ui.notifications.success("Walls created successfully!");
+            ui.notifications.notify("Walls created successfully!");
         } catch (error) {
             console.error("Wall Maker Error:", error);
             ui.notifications.error("An error occurred while creating walls. Check console for details.");
@@ -1247,24 +1243,17 @@ class WallMaker {
                         wall.start.y,
                         wall.end.x,
                         wall.end.y
-                    ]
+                    ],
+                    type: wallType,
+                    light: CONST.WALL_SENSE_TYPES.NORMAL,
+                    sight: CONST.WALL_SENSE_TYPES.NORMAL,
+                    sound: CONST.WALL_SENSE_TYPES.NORMAL,
+                    move: CONST.WALL_MOVEMENT_TYPES.NORMAL,
+                    dir: CONST.WALL_DIRECTIONS.BOTH
                 };
 
-                if (game.version >= "12") {
-                    baseData.type = wallType === "normal" ? "regular" : wallType;
-                    baseData.light = CONST.WALL_SENSE_TYPES.NORMAL;
-                    baseData.sight = CONST.WALL_SENSE_TYPES.NORMAL;
-                    baseData.sound = CONST.WALL_SENSE_TYPES.NORMAL;
-                    baseData.move = CONST.WALL_MOVEMENT_TYPES.NORMAL;
-                    baseData.dir = CONST.WALL_DIRECTIONS.BOTH;
-                    if (wallType === "door") {
-                        baseData.ds = CONST.WALL_DOOR_STATES.CLOSED;
-                    }
-                } else {
-                    baseData.type = wallType;
-                    if (wallType === "door") {
-                        baseData.ds = 0;
-                    }
+                if (wallType === "door") {
+                    baseData.ds = CONST.WALL_DOOR_STATES.CLOSED;
                 }
 
                 return baseData;
@@ -1280,13 +1269,7 @@ class WallMaker {
             for (let i = 0; i < wallBatches.length; i += CONCURRENCY_LIMIT) {
                 const batchPromises = wallBatches
                     .slice(i, i + CONCURRENCY_LIMIT)
-                    .map(batch => {
-                        if (game.version >= "12") {
-                            return scene.walls.createDocuments(batch);
-                        } else {
-                            return scene.createEmbeddedDocuments("Wall", batch);
-                        }
-                    });
+                    .map(batch => scene.walls.createDocuments(batch));
                 
                 const batchResults = await Promise.all(batchPromises);
                 results.push(...batchResults);
