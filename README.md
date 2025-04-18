@@ -9,6 +9,8 @@ A Foundry VTT module that automatically detects and creates walls from scene bac
 - Structural analysis for better wall placement
 - Dark scene enhancement for improved detection in low-light images
 - Customizable settings for fine-tuning wall detection
+- Enhanced grayscale data handling for better dark scene processing
+- Improved scene image handling for V12.7 compatibility
 - Compatible with Foundry VTT v11 and v12.7
 
 ## Installation

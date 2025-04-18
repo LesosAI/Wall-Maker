@@ -32,6 +32,18 @@
             "wallContinuity": {
                 "name": "Wall Continuity",
                 "hint": "How strongly to prefer continuous walls over disconnected segments"
+            },
+            "minEdgeStrength": {
+                "name": "Minimum Edge Strength",
+                "hint": "Minimum strength required to consider a pixel as an edge (reduces noise)"
+            },
+            "maxEdgeStrength": {
+                "name": "Maximum Edge Strength",
+                "hint": "Maximum strength threshold for strong edges"
+            },
+            "enhancementMethod": {
+                "name": "Dark Region Enhancement Method",
+                "hint": "Choose the method for enhancing dark regions"
             }
         }
     }

@@ -377,7 +377,7 @@ class WallMaker {
         const height = canvas.height;
 
         // Convert to grayscale with enhanced dark region handling
-        const grayscale = new Float32Array(width * height);
+        let grayscale = new Float32Array(width * height);
         const histogram = new Array(256).fill(0);
         let totalPixels = width * height;
 
@@ -1083,68 +1083,462 @@ class WallMaker {
     // Add helper methods for image enhancement
     static adaptiveHistogramEqualization(grayscale, width, height, options) {
         const { clipLimit = 4.0, tileSize = 8, edgePreservation = 0.75 } = options;
-        // Implementation of adaptive histogram equalization
-        // This is a placeholder - actual implementation would go here
-        return grayscale;
+        const enhanced = new Uint8ClampedArray(grayscale);
+        const tilesX = Math.ceil(width / tileSize);
+        const tilesY = Math.ceil(height / tileSize);
+        
+        // Process each tile
+        for (let ty = 0; ty < tilesY; ty++) {
+            for (let tx = 0; tx < tilesX; tx++) {
+                const startX = tx * tileSize;
+                const startY = ty * tileSize;
+                const endX = Math.min(startX + tileSize, width);
+                const endY = Math.min(startY + tileSize, height);
+                
+                // Calculate histogram for this tile
+                const histogram = new Array(256).fill(0);
+                for (let y = startY; y < endY; y++) {
+                    for (let x = startX; x < endX; x++) {
+                        const idx = y * width + x;
+                        histogram[Math.floor(grayscale[idx])]++;
+                    }
+                }
+                
+                // Clip histogram
+                const clipThreshold = Math.floor(clipLimit * (endX - startX) * (endY - startY) / 256);
+                let excess = 0;
+                for (let i = 0; i < 256; i++) {
+                    if (histogram[i] > clipThreshold) {
+                        excess += histogram[i] - clipThreshold;
+                        histogram[i] = clipThreshold;
+                    }
+                }
+                
+                // Redistribute excess
+                const excessPerBin = Math.floor(excess / 256);
+                for (let i = 0; i < 256; i++) {
+                    histogram[i] += excessPerBin;
+                }
+                
+                // Calculate cumulative distribution
+                const cdf = new Array(256);
+                cdf[0] = histogram[0];
+                for (let i = 1; i < 256; i++) {
+                    cdf[i] = cdf[i - 1] + histogram[i];
+                }
+                
+                // Normalize and apply
+                const cdfMin = Math.min(...cdf.filter(v => v > 0));
+                const scale = 255 / (cdf[255] - cdfMin);
+                
+                for (let y = startY; y < endY; y++) {
+                    for (let x = startX; x < endX; x++) {
+                        const idx = y * width + x;
+                        const value = Math.floor(grayscale[idx]);
+                        const newValue = Math.round((cdf[value] - cdfMin) * scale);
+                        enhanced[idx] = Math.min(255, Math.max(0, newValue));
+                    }
+                }
+            }
+        }
+        
+        return enhanced;
     }
 
     static exposureCompensation(grayscale, stats, options) {
         const { shadowRecovery = 0.5, localContrast = 0.5 } = options;
-        // Implementation of exposure compensation
-        // This is a placeholder - actual implementation would go here
-        return grayscale;
+        const enhanced = new Uint8ClampedArray(grayscale);
+        const { meanBrightness, stdDev } = stats;
+        
+        // Calculate adaptive exposure adjustment
+        const targetBrightness = 128;
+        const exposureAdjust = targetBrightness / meanBrightness;
+        
+        // Calculate local contrast enhancement factor
+        const contrastFactor = 1 + (localContrast * stdDev / 128);
+        
+        // Apply exposure compensation with shadow recovery
+        for (let i = 0; i < grayscale.length; i++) {
+            const value = grayscale[i];
+            let adjusted = value * exposureAdjust;
+            
+            // Enhanced shadow recovery
+            if (value < meanBrightness) {
+                const shadowBoost = shadowRecovery * (meanBrightness - value) / meanBrightness;
+                adjusted = adjusted * (1 + shadowBoost);
+            }
+            
+            // Apply local contrast
+            const centered = adjusted - meanBrightness;
+            adjusted = meanBrightness + centered * contrastFactor;
+            
+            enhanced[i] = Math.min(255, Math.max(0, Math.round(adjusted)));
+        }
+        
+        return enhanced;
     }
 
     static shadowRecoveryEnhancement(grayscale, stats, options) {
         const { strength = 0.5, threshold = 128 } = options;
-        // Implementation of shadow recovery
-        // This is a placeholder - actual implementation would go here
-        return grayscale;
+        const enhanced = new Uint8ClampedArray(grayscale);
+        const { meanBrightness } = stats;
+        
+        // Calculate shadow regions
+        for (let i = 0; i < grayscale.length; i++) {
+            const value = grayscale[i];
+            if (value < threshold) {
+                // Calculate shadow boost based on darkness level
+                const darkness = (threshold - value) / threshold;
+                const boost = 1 + (strength * darkness);
+                
+                // Apply non-linear boost to preserve details
+                const adjusted = value * boost;
+                enhanced[i] = Math.min(255, Math.max(0, Math.round(adjusted)));
+            } else {
+                enhanced[i] = value;
+            }
+        }
+        
+        return enhanced;
     }
 
     static multiScaleEnhancement(grayscale, width, height, options) {
         const { levels = 3, strength = 0.5 } = options;
-        // Implementation of multi-scale enhancement
-        // This is a placeholder - actual implementation would go here
-        return grayscale;
+        const enhanced = new Uint8ClampedArray(grayscale);
+        
+        // Create Gaussian pyramid
+        const pyramid = [grayscale];
+        let currentWidth = width;
+        let currentHeight = height;
+        
+        for (let level = 1; level < levels; level++) {
+            currentWidth = Math.floor(currentWidth / 2);
+            currentHeight = Math.floor(currentHeight / 2);
+            const downsampled = new Uint8ClampedArray(currentWidth * currentHeight);
+            
+            // Downsample with Gaussian blur
+            for (let y = 0; y < currentHeight; y++) {
+                for (let x = 0; x < currentWidth; x++) {
+                    const srcX = x * 2;
+                    const srcY = y * 2;
+                    const idx = y * currentWidth + x;
+                    
+                    // Simple 2x2 box filter
+                    const sum = pyramid[level - 1][srcY * (currentWidth * 2) + srcX] +
+                              pyramid[level - 1][srcY * (currentWidth * 2) + srcX + 1] +
+                              pyramid[level - 1][(srcY + 1) * (currentWidth * 2) + srcX] +
+                              pyramid[level - 1][(srcY + 1) * (currentWidth * 2) + srcX + 1];
+                    downsampled[idx] = Math.round(sum / 4);
+                }
+            }
+            
+            pyramid.push(downsampled);
+        }
+        
+        // Process each level
+        for (let level = 0; level < levels; level++) {
+            const levelWidth = Math.floor(width / Math.pow(2, level));
+            const levelHeight = Math.floor(height / Math.pow(2, level));
+            const levelStrength = strength * (1 - level / levels);
+            
+            // Apply local contrast enhancement
+            for (let y = 0; y < levelHeight; y++) {
+                for (let x = 0; x < levelWidth; x++) {
+                    const idx = y * levelWidth + x;
+                    const value = pyramid[level][idx];
+                    
+                    // Calculate local mean
+                    let sum = 0;
+                    let count = 0;
+                    for (let ky = -1; ky <= 1; ky++) {
+                        for (let kx = -1; kx <= 1; kx++) {
+                            const nx = x + kx;
+                            const ny = y + ky;
+                            if (nx >= 0 && nx < levelWidth && ny >= 0 && ny < levelHeight) {
+                                sum += pyramid[level][ny * levelWidth + nx];
+                                count++;
+                            }
+                        }
+                    }
+                    const localMean = sum / count;
+                    
+                    // Enhance contrast
+                    const contrast = (value - localMean) * levelStrength;
+                    pyramid[level][idx] = Math.min(255, Math.max(0, Math.round(localMean + contrast)));
+                }
+            }
+        }
+        
+        // Upsample and combine
+        for (let level = levels - 1; level > 0; level--) {
+            const levelWidth = Math.floor(width / Math.pow(2, level));
+            const levelHeight = Math.floor(height / Math.pow(2, level));
+            
+            for (let y = 0; y < levelHeight; y++) {
+                for (let x = 0; x < levelWidth; x++) {
+                    const srcIdx = y * levelWidth + x;
+                    const dstX = x * 2;
+                    const dstY = y * 2;
+                    
+                    // Simple 2x2 upsampling
+                    const value = pyramid[level][srcIdx];
+                    pyramid[level - 1][dstY * (levelWidth * 2) + dstX] = value;
+                    pyramid[level - 1][dstY * (levelWidth * 2) + dstX + 1] = value;
+                    pyramid[level - 1][(dstY + 1) * (levelWidth * 2) + dstX] = value;
+                    pyramid[level - 1][(dstY + 1) * (levelWidth * 2) + dstX + 1] = value;
+                }
+            }
+        }
+        
+        // Copy final result
+        enhanced.set(pyramid[0]);
+        return enhanced;
     }
 
     static combinedEnhancement(grayscale, width, height, options) {
         const { stats, shadowRecovery, localContrast, noiseReduction, edgePreservation } = options;
-        // Implementation of combined enhancement methods
-        // This is a placeholder - actual implementation would go here
-        return grayscale;
+        const enhanced = new Uint8ClampedArray(grayscale);
+        
+        // First pass: shadow recovery
+        const shadowEnhanced = this.shadowRecoveryEnhancement(grayscale, stats, {
+            strength: shadowRecovery,
+            threshold: stats.meanBrightness
+        });
+        
+        // Second pass: local contrast
+        const contrastEnhanced = this.exposureCompensation(shadowEnhanced, stats, {
+            shadowRecovery: 0,
+            localContrast
+        });
+        
+        // Third pass: noise reduction with edge preservation
+        const denoised = this.edgeAwareDenoising(contrastEnhanced, width, height, {
+            noiseReduction,
+            edgePreservation
+        });
+        
+        // Final pass: adaptive histogram equalization
+        const finalEnhanced = this.adaptiveHistogramEqualization(denoised, width, height, {
+            clipLimit: 2.0,
+            tileSize: 16,
+            edgePreservation
+        });
+        
+        enhanced.set(finalEnhanced);
+        return enhanced;
     }
 
     static edgeAwareDenoising(grayscale, width, height, options) {
         const { noiseReduction = 0.3, edgePreservation = 0.75 } = options;
-        // Implementation of edge-aware denoising
-        // This is a placeholder - actual implementation would go here
-        return grayscale;
+        const enhanced = new Uint8ClampedArray(grayscale);
+        const kernelSize = 3;
+        const halfKernel = Math.floor(kernelSize / 2);
+        
+        for (let y = halfKernel; y < height - halfKernel; y++) {
+            for (let x = halfKernel; x < width - halfKernel; x++) {
+                const idx = y * width + x;
+                const centerValue = grayscale[idx];
+                
+                // Calculate local statistics
+                let sum = 0;
+                let sumSquared = 0;
+                let count = 0;
+                
+                for (let ky = -halfKernel; ky <= halfKernel; ky++) {
+                    for (let kx = -halfKernel; kx <= halfKernel; kx++) {
+                        const nx = x + kx;
+                        const ny = y + ky;
+                        const nidx = ny * width + nx;
+                        const value = grayscale[nidx];
+                        
+                        sum += value;
+                        sumSquared += value * value;
+                        count++;
+                    }
+                }
+                
+                const mean = sum / count;
+                const variance = (sumSquared / count) - (mean * mean);
+                const stdDev = Math.sqrt(variance);
+                
+                // Calculate edge strength
+                const edgeStrength = Math.abs(centerValue - mean) / stdDev;
+                const isEdge = edgeStrength > edgePreservation;
+                
+                // Apply adaptive filtering
+                if (isEdge) {
+                    // Preserve edge
+                    enhanced[idx] = centerValue;
+                } else {
+                    // Apply noise reduction
+                    const weight = 1 - (noiseReduction * (1 - edgeStrength));
+                    enhanced[idx] = Math.round(centerValue * weight + mean * (1 - weight));
+                }
+            }
+        }
+        
+        return enhanced;
     }
 
     static computeAdaptiveThreshold(grayscale, width, height) {
-        // Implementation of adaptive thresholding
-        // This is a placeholder - actual implementation would go here
-        return grayscale;
+        const enhanced = new Uint8ClampedArray(grayscale);
+        const blockSize = 11;
+        const C = 2;
+        
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const idx = y * width + x;
+                
+                // Calculate local mean
+                let sum = 0;
+                let count = 0;
+                const halfBlock = Math.floor(blockSize / 2);
+                
+                for (let ky = -halfBlock; ky <= halfBlock; ky++) {
+                    for (let kx = -halfBlock; kx <= halfBlock; kx++) {
+                        const nx = x + kx;
+                        const ny = y + ky;
+                        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                            sum += grayscale[ny * width + nx];
+                            count++;
+                        }
+                    }
+                }
+                
+                const mean = sum / count;
+                enhanced[idx] = grayscale[idx] > (mean - C) ? 255 : 0;
+            }
+        }
+        
+        return enhanced;
     }
 
     static adaptiveGaussianBlur(grayscale, width, height, isDarkScene) {
-        // Implementation of adaptive Gaussian blur
-        // This is a placeholder - actual implementation would go here
-        return grayscale;
+        const enhanced = new Uint8ClampedArray(grayscale);
+        const kernelSize = isDarkScene ? 5 : 3;
+        const halfKernel = Math.floor(kernelSize / 2);
+        const sigma = isDarkScene ? 1.5 : 1.0;
+        
+        // Precompute Gaussian kernel
+        const kernel = [];
+        let sum = 0;
+        for (let y = -halfKernel; y <= halfKernel; y++) {
+            for (let x = -halfKernel; x <= halfKernel; x++) {
+                const value = Math.exp(-(x * x + y * y) / (2 * sigma * sigma));
+                kernel.push(value);
+                sum += value;
+            }
+        }
+        
+        // Normalize kernel
+        for (let i = 0; i < kernel.length; i++) {
+            kernel[i] /= sum;
+        }
+        
+        // Apply Gaussian blur
+        for (let y = halfKernel; y < height - halfKernel; y++) {
+            for (let x = halfKernel; x < width - halfKernel; x++) {
+                const idx = y * width + x;
+                let sum = 0;
+                let kernelIdx = 0;
+                
+                for (let ky = -halfKernel; ky <= halfKernel; ky++) {
+                    for (let kx = -halfKernel; kx <= halfKernel; kx++) {
+                        const nx = x + kx;
+                        const ny = y + ky;
+                        sum += grayscale[ny * width + nx] * kernel[kernelIdx++];
+                    }
+                }
+                
+                enhanced[idx] = Math.round(sum);
+            }
+        }
+        
+        return enhanced;
     }
 
     static enhancedNonMaxSuppression(gradientMagnitude, gradientDirection, width, height) {
-        // Implementation of enhanced non-maximum suppression
-        // This is a placeholder - actual implementation would go here
-        return gradientMagnitude;
+        const enhanced = new Float32Array(gradientMagnitude);
+        const angleStep = Math.PI / 8;
+        
+        for (let y = 1; y < height - 1; y++) {
+            for (let x = 1; x < width - 1; x++) {
+                const idx = y * width + x;
+                const angle = gradientDirection[idx];
+                const magnitude = gradientMagnitude[idx];
+                
+                // Quantize angle to nearest 45 degrees
+                const quantizedAngle = Math.round(angle / angleStep) * angleStep;
+                
+                // Determine neighbors to compare
+                let nx1, ny1, nx2, ny2;
+                if (Math.abs(quantizedAngle) < angleStep || Math.abs(quantizedAngle - Math.PI) < angleStep) {
+                    // Horizontal
+                    nx1 = x - 1; ny1 = y;
+                    nx2 = x + 1; ny2 = y;
+                } else if (Math.abs(quantizedAngle - Math.PI/2) < angleStep) {
+                    // Vertical
+                    nx1 = x; ny1 = y - 1;
+                    nx2 = x; ny2 = y + 1;
+                } else if (Math.abs(quantizedAngle - Math.PI/4) < angleStep) {
+                    // Diagonal 45
+                    nx1 = x - 1; ny1 = y - 1;
+                    nx2 = x + 1; ny2 = y + 1;
+                } else {
+                    // Diagonal 135
+                    nx1 = x - 1; ny1 = y + 1;
+                    nx2 = x + 1; ny2 = y - 1;
+                }
+                
+                // Suppress non-maximum values
+                const mag1 = gradientMagnitude[ny1 * width + nx1];
+                const mag2 = gradientMagnitude[ny2 * width + nx2];
+                
+                if (magnitude < mag1 || magnitude < mag2) {
+                    enhanced[idx] = 0;
+                }
+            }
+        }
+        
+        return enhanced;
     }
 
     static traceEdge(x, y, suppressed, lowThreshold, width, height, visited, edges) {
-        // Implementation of edge tracing
-        // This is a placeholder - actual implementation would go here
-        edges.push({ x, y });
+        const stack = [[x, y]];
+        const currentEdge = [];
+        
+        while (stack.length > 0) {
+            const [cx, cy] = stack.pop();
+            const idx = cy * width + cx;
+            
+            if (visited.has(idx)) continue;
+            visited.add(idx);
+            
+            if (suppressed[idx] >= lowThreshold) {
+                currentEdge.push({ x: cx, y: cy });
+                
+                // Check 8-connected neighbors
+                for (let ky = -1; ky <= 1; ky++) {
+                    for (let kx = -1; kx <= 1; kx++) {
+                        if (kx === 0 && ky === 0) continue;
+                        
+                        const nx = cx + kx;
+                        const ny = cy + ky;
+                        
+                        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                            const nidx = ny * width + nx;
+                            if (!visited.has(nidx) && suppressed[nidx] >= lowThreshold) {
+                                stack.push([nx, ny]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (currentEdge.length > 0) {
+            edges.push(currentEdge);
+        }
     }
 }
 
