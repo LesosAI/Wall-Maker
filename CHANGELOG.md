@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.5] - 2024-04-18
+### Added
+- Enhanced edge detection with improved WebGL shader error handling
+- Optimized CPU-based edge detection with pre-calculated kernel offsets
+- Added edge direction information to improve wall detection accuracy
+- Improved sensitivity and edge strength threshold calculations
+
+### Fixed
+- Fixed WebGL shader compilation and program linking error handling
+- Improved fallback mechanism when WebGL is unavailable
+- Enhanced edge detection performance for large images
+
 ## [1.0.4] - 2024-04-18
 ### Added
 - Enhanced edge detection with WebGL acceleration

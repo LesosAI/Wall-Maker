@@ -309,24 +309,18 @@ class WallMaker {
     }
 
     static async handleAutoWall() {
-        const currentScene = game.version >= "12" ? 
-            (game.scenes.current || game.scenes.active) : 
-            game.scenes.current;
-
+        const currentScene = game.scenes.current;
         if (!currentScene) {
             ui.notifications.error("No active scene!");
             return;
         }
 
-        // Updated scene image access for V10+ compatibility
         const texturePath = currentScene.background?.src || currentScene.img;
-
         if (!texturePath) {
             ui.notifications.error("Scene has no background image!");
             return;
         }
 
-        // Create a progress bar
         const progressBar = new this.ProgressBar({
             label: "Wall Maker",
             psteps: 5
@@ -334,24 +328,20 @@ class WallMaker {
 
         try {
             progressBar.advance("Loading scene image...");
-            const img = await this.loadSceneImage(texturePath);
-            if (!img) {
-                ui.notifications.error("Could not load scene image!");
-                return;
-            }
-
+            const imageData = await this.loadSceneImage(texturePath);
+            
             // Optimize image size for processing
             const maxDimension = 2000; // Maximum dimension for processing
-            const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+            const scale = Math.min(1, maxDimension / Math.max(imageData.width, imageData.height));
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
-            canvas.width = img.width * scale;
-            canvas.height = img.height * scale;
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            const processedImg = canvas;
+            canvas.width = imageData.width * scale;
+            canvas.height = imageData.height * scale;
+            ctx.putImageData(imageData, 0, 0);
+            const scaledImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
             progressBar.advance("Detecting edges...");
-            const edges = await this.detectEdges(processedImg);
+            const edges = await this.detectEdges(scaledImageData);
 
             progressBar.advance("Analyzing wall segments...");
             const walls = this.convertEdgesToWalls(edges);
@@ -418,9 +408,32 @@ class WallMaker {
         return new Promise((resolve, reject) => {
             const img = new Image();
             img.crossOrigin = "anonymous";
-            img.onload = () => resolve(img);
-            img.onerror = reject;
-            img.src = src;
+            
+            img.onload = () => {
+                // Create a canvas to ensure we have valid image data
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+                
+                try {
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    resolve(imageData);
+                } catch (error) {
+                    reject(new Error('Failed to get image data: ' + error.message));
+                }
+            };
+            
+            img.onerror = (error) => {
+                reject(new Error('Failed to load image: ' + error.message));
+            };
+            
+            try {
+                img.src = src;
+            } catch (error) {
+                reject(new Error('Invalid image source: ' + error.message));
+            }
         });
     }
 
@@ -439,154 +452,153 @@ class WallMaker {
             useSharpening = true
         } = options;
 
+        // Validate input
+        if (!imageData || !(imageData instanceof ImageData)) {
+            throw new Error('Invalid image data provided to detectEdges');
+        }
+
         // Create canvas for processing
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
+        
+        // Set canvas dimensions to match image data
         canvas.width = imageData.width;
         canvas.height = imageData.height;
-        ctx.putImageData(imageData, 0, 0);
+        
+        // Create a new ImageData to ensure we have valid data
+        const validImageData = new ImageData(
+            new Uint8ClampedArray(imageData.data),
+            imageData.width,
+            imageData.height
+        );
+        
+        // Put the image data into the canvas
+        ctx.putImageData(validImageData, 0, 0);
 
         // Convert to grayscale using WebGL for better performance
-        const gl = canvas.getContext('webgl');
-        if (gl) {
-            const texture = gl.createTexture();
-            gl.bindTexture(gl.TEXTURE_2D, texture);
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
-            
-            // Use WebGL shader for grayscale conversion
-            const program = gl.createProgram();
-            const vertexShader = gl.createShader(gl.VERTEX_SHADER);
-            const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
-            
-            gl.shaderSource(vertexShader, `
-                attribute vec2 position;
-                void main() {
-                    gl_Position = vec4(position, 0, 1);
-                }
-            `);
-            
-            gl.shaderSource(fragmentShader, `
-                precision highp float;
-                uniform sampler2D texture;
-                void main() {
-                    vec4 color = texture2D(texture, gl_FragCoord.xy / vec2(${canvas.width}, ${canvas.height}));
-                    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                    gl_FragColor = vec4(vec3(gray), 1.0);
-                }
-            `);
-            
-            gl.compileShader(vertexShader);
-            gl.compileShader(fragmentShader);
-            gl.attachShader(program, vertexShader);
-            gl.attachShader(program, fragmentShader);
-            gl.linkProgram(program);
-            gl.useProgram(program);
-            
-            // Draw to canvas
-            const buffer = gl.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-            gl.enableVertexAttribArray(0);
-            gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-            
-            // Get processed image data
-            const processedImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            
-            // Clean up WebGL resources
-            gl.deleteTexture(texture);
-            gl.deleteProgram(program);
+        const gl = canvas.getContext('webgl', { preserveDrawingBuffer: true });
+        if (!gl) {
+            console.warn('WebGL not available, falling back to CPU processing');
+            // Fallback to CPU processing
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            return this.processEdgesCPU(imageData, sensitivity, minEdgeStrength);
+        }
+
+        // Create and configure texture
+        const texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, validImageData);
+
+        // Create framebuffer
+        const framebuffer = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+        const renderTexture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, renderTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, canvas.width, canvas.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, renderTexture, 0);
+
+        // Create shader program
+        const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vertexShader, `
+            attribute vec2 position;
+            void main() {
+                gl_Position = vec4(position, 0, 1);
+            }
+        `);
+        gl.compileShader(vertexShader);
+        
+        if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
+            console.error('Vertex shader compilation error:', gl.getShaderInfoLog(vertexShader));
+            gl.deleteShader(vertexShader);
+            return this.processEdgesCPU(imageData, sensitivity, minEdgeStrength);
+        }
+
+        const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(fragmentShader, `
+            precision highp float;
+            uniform sampler2D texture;
+            void main() {
+                vec4 color = texture2D(texture, gl_FragCoord.xy / vec2(${canvas.width}, ${canvas.height}));
+                float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                gl_FragColor = vec4(vec3(gray), 1.0);
+            }
+        `);
+        gl.compileShader(fragmentShader);
+        
+        if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
+            console.error('Fragment shader compilation error:', gl.getShaderInfoLog(fragmentShader));
             gl.deleteShader(vertexShader);
             gl.deleteShader(fragmentShader);
-            gl.deleteBuffer(buffer);
-            
-            imageData = processedImageData;
+            return this.processEdgesCPU(imageData, sensitivity, minEdgeStrength);
         }
 
-        // Apply adaptive histogram equalization if enabled
-        if (useAdaptiveHistogram) {
-            imageData = this.adaptiveHistogramEqualization(imageData, {
-                clipLimit: 2.0,
-                tileSize: 8
-            });
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+        
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            console.error('Program linking error:', gl.getProgramInfoLog(program));
+            gl.deleteShader(vertexShader);
+            gl.deleteShader(fragmentShader);
+            gl.deleteProgram(program);
+            return this.processEdgesCPU(imageData, sensitivity, minEdgeStrength);
         }
 
-        // Apply exposure compensation if enabled
-        if (useExposureCompensation) {
-            imageData = this.exposureCompensation(imageData, {
-                exposure: 1.0,
-                gamma: 1.0
-            });
-        }
+        // Create vertex buffer
+        const buffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+        const positionLocation = gl.getAttribLocation(program, 'position');
+        gl.enableVertexAttribArray(positionLocation);
+        gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
 
-        // Apply shadow recovery if enabled
-        if (useShadowRecovery) {
-            imageData = this.shadowRecovery(imageData, {
-                shadowRecovery: 0.5,
-                highlightRecovery: 0.5
-            });
-        }
+        // Draw to framebuffer
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-        // Apply local contrast if enabled
-        if (useLocalContrast) {
-            imageData = this.localContrast(imageData, {
-                localContrast: 0.5,
-                radius: 50
-            });
-        }
+        // Read back the processed image
+        const processedImageData = new ImageData(canvas.width, canvas.height);
+        gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, processedImageData.data);
 
-        // Apply noise reduction if enabled
-        if (useNoiseReduction) {
-            imageData = this.noiseReduction(imageData, {
-                strength: 0.5,
-                preserveDetails: true
-            });
-        }
+        // Clean up WebGL resources
+        gl.deleteTexture(texture);
+        gl.deleteTexture(renderTexture);
+        gl.deleteFramebuffer(framebuffer);
+        gl.deleteBuffer(buffer);
+        gl.deleteProgram(program);
+        gl.deleteShader(vertexShader);
+        gl.deleteShader(fragmentShader);
 
-        // Apply edge enhancement if enabled
-        if (useEdgeEnhancement) {
-            imageData = this.edgeEnhancement(imageData, {
-                strength: 0.5,
-                radius: 1
-            });
-        }
+        // Process edges using the grayscale image
+        return this.processEdgesCPU(processedImageData, sensitivity, minEdgeStrength);
+    }
 
-        // Apply detail enhancement if enabled
-        if (useDetailEnhancement) {
-            imageData = this.detailEnhancement(imageData, {
-                strength: 0.5,
-                radius: 1
-            });
-        }
-
-        // Apply color correction if enabled
-        if (useColorCorrection) {
-            imageData = this.colorCorrection(imageData, {
-                brightness: 0,
-                contrast: 0,
-                saturation: 0
-            });
-        }
-
-        // Apply sharpening if enabled
-        if (useSharpening) {
-            imageData = this.sharpening(imageData, {
-                strength: 0.5,
-                radius: 1
-            });
-        }
-
-        // Detect edges using optimized Sobel operator
+    static processEdgesCPU(imageData, sensitivity, minEdgeStrength) {
         const edges = [];
         const width = imageData.width;
         const height = imageData.height;
         const data = imageData.data;
-        const edgeThreshold = minEdgeStrength * 255;
-
+        
+        // Adjust threshold based on sensitivity
+        const edgeThreshold = minEdgeStrength * 255 * (1 + (1 - sensitivity));
+        
         // Use typed arrays for better performance
         const edgeMap = new Uint8Array(width * height);
         const sobelX = new Int32Array([-1, 0, 1, -2, 0, 2, -1, 0, 1]);
         const sobelY = new Int32Array([-1, -2, -1, 0, 0, 0, 1, 2, 1]);
+        
+        // Pre-calculate kernel offsets for better performance
+        const kernelOffsets = [];
+        for (let ky = -1; ky <= 1; ky++) {
+            for (let kx = -1; kx <= 1; kx++) {
+                kernelOffsets.push(ky * width + kx);
+            }
+        }
 
         // Process image in chunks for better performance
         const CHUNK_SIZE = 1000;
@@ -600,20 +612,23 @@ class WallMaker {
                         const idx = cy * width + cx;
                         let gx = 0, gy = 0;
                         
-                        // Apply Sobel operator
-                        for (let ky = -1; ky <= 1; ky++) {
-                            for (let kx = -1; kx <= 1; kx++) {
-                                const pixelIdx = (cy + ky) * width + (cx + kx);
-                                const gray = data[pixelIdx * 4];
-                                gx += gray * sobelX[(ky + 1) * 3 + (kx + 1)];
-                                gy += gray * sobelY[(ky + 1) * 3 + (kx + 1)];
-                            }
+                        // Apply Sobel operator using pre-calculated offsets
+                        for (let i = 0; i < 9; i++) {
+                            const pixelIdx = idx + kernelOffsets[i];
+                            const gray = data[pixelIdx * 4];
+                            gx += gray * sobelX[i];
+                            gy += gray * sobelY[i];
                         }
                         
                         const magnitude = Math.sqrt(gx * gx + gy * gy);
                         if (magnitude > edgeThreshold) {
                             edgeMap[idx] = 255;
-                            edges.push({ x: cx, y: cy, strength: magnitude });
+                            edges.push({ 
+                                x: cx, 
+                                y: cy, 
+                                strength: magnitude,
+                                direction: Math.atan2(gy, gx)
+                            });
                         }
                     }
                 }
