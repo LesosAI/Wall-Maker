@@ -1,0 +1,38 @@
+{
+    "wall-maker": {
+        "button": {
+            "label": "Auto Wall Generator",
+            "title": "Automatically generate walls from scene image"
+        },
+        "notifications": {
+            "no-scene": "No active scene!",
+            "no-image": "Scene has no background image!",
+            "load-error": "Could not load scene image!",
+            "processing": "Processing image edges...",
+            "success": "Created {count} walls!",
+            "error": "Error creating walls. Check the console for details."
+        },
+        "settings": {
+            "sensitivity": {
+                "name": "Edge Detection Sensitivity",
+                "hint": "Adjust the sensitivity of edge detection (higher values detect more edges)"
+            },
+            "wallType": {
+                "name": "Default Wall Type",
+                "hint": "The type of wall to create"
+            },
+            "darkSceneEnhancement": {
+                "name": "Dark Scene Enhancement",
+                "hint": "Automatically enhance dark scenes for better wall detection"
+            },
+            "textureFiltering": {
+                "name": "Texture Filtering",
+                "hint": "Filter out walls that appear to be textures or patterns"
+            },
+            "wallContinuity": {
+                "name": "Wall Continuity",
+                "hint": "How strongly to prefer continuous walls over disconnected segments"
+            }
+        }
+    }
+} 
