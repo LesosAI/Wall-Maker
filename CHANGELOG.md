@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.4] - 2024-04-18
+### Added
+- Enhanced image processing with improved constant handling
+- Added new image enhancement methods for better wall detection
+- Improved pattern recognition algorithms
+- Added support for more wall types and configurations
+### Fixed
+- Fixed method binding issues in spatial analysis methods
+- Resolved static method calls in WallMaker class
+- Improved error handling in wall generation process
+
 ## [1.0.3] - 2024-04-18
 ### Added
 - Improved image enhancement methods with better constant handling
