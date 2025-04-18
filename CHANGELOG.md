@@ -2,14 +2,23 @@
 
 ## [1.0.4] - 2024-04-18
 ### Added
-- Enhanced image processing with improved constant handling
-- Added new image enhancement methods for better wall detection
-- Improved pattern recognition algorithms
-- Added support for more wall types and configurations
+- Enhanced edge detection with WebGL acceleration
+- Configurable image processing pipeline with multiple enhancement options
+- Optimized memory usage and processing performance
+- Chunk-based image processing for better handling of large scenes
+- Early exit conditions for improved performance
+
+### Changed
+- Improved edge detection algorithm with better noise reduction
+- Enhanced dark scene handling with adaptive histogram equalization
+- Optimized wall detection in low-contrast areas
+- Better handling of texture patterns and decorative elements
+
 ### Fixed
-- Fixed method binding issues in spatial analysis methods
-- Resolved static method calls in WallMaker class
-- Improved error handling in wall generation process
+- Fixed memory leaks in image processing
+- Improved stability with large scene images
+- Better error handling in edge detection
+- Fixed issues with wall detection in dark scenes
 
 ## [1.0.3] - 2024-04-18
 ### Added

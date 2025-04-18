@@ -1,14 +1,53 @@
 /* Wall Maker Module Styles */
 .wall-maker-progress {
     position: fixed;
-    top: 50%;
+    top: 20px;
     left: 50%;
-    transform: translate(-50%, -50%);
+    transform: translateX(-50%);
     background: rgba(0, 0, 0, 0.8);
-    color: white;
-    padding: 1rem;
+    padding: 15px;
     border-radius: 5px;
-    z-index: 100;
+    color: white;
+    z-index: 100000;
+    min-width: 300px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+    opacity: 1;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+    display: block !important;
+    visibility: visible !important;
+}
+
+.wall-maker-progress .progress-label {
+    margin-bottom: 10px;
+    font-weight: bold;
+    text-align: center;
+    font-size: 1.1em;
+    color: white;
+}
+
+.wall-maker-progress .progress-bar {
+    background: rgba(255, 255, 255, 0.2);
+    height: 12px;
+    border-radius: 6px;
+    overflow: hidden;
+    margin: 10px 0;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.wall-maker-progress .progress-fill {
+    background: linear-gradient(to right, #4CAF50, #45a049);
+    height: 100%;
+    transition: width 0.3s ease;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    min-width: 0%;
+}
+
+.wall-maker-progress .progress-text {
+    font-size: 0.9em;
+    text-align: center;
+    margin-top: 5px;
+    color: rgba(255, 255, 255, 0.9);
 }
 
 /* Style for the wall maker button when active */

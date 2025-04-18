@@ -18,7 +18,9 @@ class WallMaker {
         WALL_RELEVANCE_THRESHOLD: 'wallRelevanceThreshold',
         TEXTURE_FILTERING: 'textureFiltering',
         WALL_CONTINUITY: 'wallContinuity',
-        IGNORE_DECORATIVE: 'ignoreDecorative'
+        IGNORE_DECORATIVE: 'ignoreDecorative',
+        CLIP_LIMIT: 'clipLimit',
+        TILE_SIZE: 'tileSize'
     };
 
     static initialize() {
@@ -261,6 +263,34 @@ class WallMaker {
             type: Boolean,
             default: true
         });
+
+        game.settings.register(this.ID, this.SETTINGS.CLIP_LIMIT, {
+            name: "Clip Limit",
+            hint: "Clip limit for histogram equalization",
+            scope: "world",
+            config: true,
+            type: Number,
+            range: {
+                min: 0,
+                max: 4,
+                step: 0.1
+            },
+            default: 2.0
+        });
+
+        game.settings.register(this.ID, this.SETTINGS.TILE_SIZE, {
+            name: "Tile Size",
+            hint: "Tile size for histogram equalization",
+            scope: "world",
+            config: true,
+            type: Number,
+            range: {
+                min: 4,
+                max: 16,
+                step: 1
+            },
+            default: 8
+        });
     }
 
     static registerHooks() {
@@ -296,16 +326,47 @@ class WallMaker {
             return;
         }
 
-        const img = await this.loadSceneImage(texturePath);
-        if (!img) {
-            ui.notifications.error("Could not load scene image!");
-            return;
-        }
+        // Create a progress bar
+        const progressBar = new this.ProgressBar({
+            label: "Wall Maker",
+            psteps: 5
+        });
 
-        ui.notifications.info("Processing image edges...");
-        const edges = await this.detectEdges(img);
-        const walls = this.convertEdgesToWalls(edges);
-        await this.createWalls(walls, currentScene);
+        try {
+            progressBar.advance("Loading scene image...");
+            const img = await this.loadSceneImage(texturePath);
+            if (!img) {
+                ui.notifications.error("Could not load scene image!");
+                return;
+            }
+
+            // Optimize image size for processing
+            const maxDimension = 2000; // Maximum dimension for processing
+            const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = img.width * scale;
+            canvas.height = img.height * scale;
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            const processedImg = canvas;
+
+            progressBar.advance("Detecting edges...");
+            const edges = await this.detectEdges(processedImg);
+
+            progressBar.advance("Analyzing wall segments...");
+            const walls = this.convertEdgesToWalls(edges);
+
+            progressBar.advance("Creating walls...");
+            await this.createWalls(walls, currentScene);
+
+            progressBar.advance("Finalizing...");
+            ui.notifications.success("Walls created successfully!");
+        } catch (error) {
+            console.error("Wall Maker Error:", error);
+            ui.notifications.error("An error occurred while creating walls. Check console for details.");
+        } finally {
+            progressBar.close();
+        }
     }
 
     static calculateImageStats(grayscale) {
@@ -363,198 +424,217 @@ class WallMaker {
         });
     }
 
-    static async detectEdges(img) {
+    static async detectEdges(imageData, options = {}) {
+        const {
+            sensitivity = this.SENSITIVITY,
+            minEdgeStrength = this.MIN_EDGE_STRENGTH,
+            useAdaptiveHistogram = true,
+            useExposureCompensation = true,
+            useShadowRecovery = true,
+            useLocalContrast = true,
+            useNoiseReduction = true,
+            useEdgeEnhancement = true,
+            useDetailEnhancement = true,
+            useColorCorrection = true,
+            useSharpening = true
+        } = options;
+
+        // Create canvas for processing
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        
-        ctx.drawImage(img, 0, 0);
-        
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const data = imageData.data;
-        const width = canvas.width;
-        const height = canvas.height;
+        canvas.width = imageData.width;
+        canvas.height = imageData.height;
+        ctx.putImageData(imageData, 0, 0);
 
-        // Convert to grayscale with enhanced dark region handling
-        let grayscale = new Float32Array(width * height);
-        const histogram = new Array(256).fill(0);
-        let totalPixels = width * height;
-
-        // First pass: calculate histogram and basic grayscale
-        for (let i = 0; i < data.length; i += 4) {
-            const r = data[i];
-            const g = data[i + 1];
-            const b = data[i + 2];
+        // Convert to grayscale using WebGL for better performance
+        const gl = canvas.getContext('webgl');
+        if (gl) {
+            const texture = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
             
-            // Enhanced grayscale conversion for dark scenes
-            const gray = Math.pow(r * 0.299 + g * 0.587 + b * 0.114, 0.85);
-            grayscale[i / 4] = gray;
-            histogram[Math.floor(gray)]++;
+            // Use WebGL shader for grayscale conversion
+            const program = gl.createProgram();
+            const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+            const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+            
+            gl.shaderSource(vertexShader, `
+                attribute vec2 position;
+                void main() {
+                    gl_Position = vec4(position, 0, 1);
+                }
+            `);
+            
+            gl.shaderSource(fragmentShader, `
+                precision highp float;
+                uniform sampler2D texture;
+                void main() {
+                    vec4 color = texture2D(texture, gl_FragCoord.xy / vec2(${canvas.width}, ${canvas.height}));
+                    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+                    gl_FragColor = vec4(vec3(gray), 1.0);
+                }
+            `);
+            
+            gl.compileShader(vertexShader);
+            gl.compileShader(fragmentShader);
+            gl.attachShader(program, vertexShader);
+            gl.attachShader(program, fragmentShader);
+            gl.linkProgram(program);
+            gl.useProgram(program);
+            
+            // Draw to canvas
+            const buffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(0);
+            gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            
+            // Get processed image data
+            const processedImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            
+            // Clean up WebGL resources
+            gl.deleteTexture(texture);
+            gl.deleteProgram(program);
+            gl.deleteShader(vertexShader);
+            gl.deleteShader(fragmentShader);
+            gl.deleteBuffer(buffer);
+            
+            imageData = processedImageData;
         }
 
-        // Calculate cumulative histogram for adaptive enhancement
-        const cumulativeHist = new Array(256);
-        cumulativeHist[0] = histogram[0];
-        for (let i = 1; i < 256; i++) {
-            cumulativeHist[i] = cumulativeHist[i - 1] + histogram[i];
-        }
-
-        // Enhanced dark region processing
-        const darkThreshold = game.settings.get(this.ID, this.SETTINGS.DARK_THRESHOLD);
-        const shadowRecovery = game.settings.get(this.ID, this.SETTINGS.SHADOW_RECOVERY) / 100;
-        const localContrast = game.settings.get(this.ID, this.SETTINGS.LOCAL_CONTRAST) / 100;
-        const noiseReduction = game.settings.get(this.ID, this.SETTINGS.NOISE_REDUCTION) / 100;
-        const edgePreservation = game.settings.get(this.ID, this.SETTINGS.EDGE_PRESERVATION) / 100;
-        const enhancementMethod = game.settings.get(this.ID, this.SETTINGS.ENHANCEMENT_METHOD);
-
-        // Calculate image statistics
-        const stats = this.calculateImageStats(grayscale);
-        const isDarkScene = stats.meanBrightness < darkThreshold;
-
-        if (isDarkScene && game.settings.get(this.ID, this.SETTINGS.DARK_SCENE_ENHANCEMENT)) {
-            switch (enhancementMethod) {
-                case "adaptive":
-                    grayscale = this.adaptiveHistogramEqualization(grayscale, width, height, {
-                        clipLimit: 4.0,
-                        tileSize: 8,
-                        edgePreservation
-                    });
-                    break;
-                case "exposure":
-                    grayscale = this.exposureCompensation(grayscale, stats, {
-                        shadowRecovery,
-                        localContrast
-                    });
-                    break;
-                case "shadow":
-                    grayscale = this.shadowRecoveryEnhancement(grayscale, stats, {
-                        strength: shadowRecovery,
-                        threshold: darkThreshold
-                    });
-                    break;
-                case "multi":
-                    grayscale = this.multiScaleEnhancement(grayscale, width, height, {
-                        levels: 3,
-                        strength: localContrast
-                    });
-                    break;
-                case "combined":
-                default:
-                    grayscale = this.combinedEnhancement(grayscale, width, height, {
-                        stats,
-                        shadowRecovery,
-                        localContrast,
-                        noiseReduction,
-                        edgePreservation
-                    });
-            }
-        }
-
-        // Apply noise reduction with edge preservation
-        if (isDarkScene && noiseReduction > 0) {
-            grayscale = this.edgeAwareDenoising(grayscale, width, height, {
-                noiseReduction,
-                edgePreservation
+        // Apply adaptive histogram equalization if enabled
+        if (useAdaptiveHistogram) {
+            imageData = this.adaptiveHistogramEqualization(imageData, {
+                clipLimit: 2.0,
+                tileSize: 8
             });
         }
 
-        // Apply local adaptive thresholding
-        const adaptiveThreshold = this.computeAdaptiveThreshold(grayscale, width, height);
-        
-        // Apply enhanced Gaussian blur with dark region awareness
-        const blurred = this.adaptiveGaussianBlur(grayscale, width, height, isDarkScene);
-
-        // Enhanced directional operators
-        const operators = {
-            horizontal: {
-                x: [-1, 0, 1, -2, 0, 2, -1, 0, 1],      // Sobel X
-                y: [-1, -2, -1, 0, 0, 0, 1, 2, 1]       // Sobel Y
-            },
-            diagonal45: {
-                x: [0, 1, 2, -1, 0, 1, -2, -1, 0],      // 45° diagonal
-                y: [-2, -1, 0, -1, 0, 1, 0, 1, 2]
-            },
-            diagonal135: {
-                x: [2, 1, 0, 1, 0, -1, 0, -1, -2],      // 135° diagonal
-                y: [0, 1, 2, -1, 0, 1, -2, -1, 0]
-            },
-            vertical: {
-                x: [-1, -2, -1, 0, 0, 0, 1, 2, 1],      // Vertical emphasis
-                y: [1, 0, -1, 2, 0, -2, 1, 0, -1]
-            }
-        };
-
-        // Calculate gradients for each direction
-        const gradientMagnitude = new Float32Array(width * height);
-        const gradientDirection = new Float32Array(width * height);
-
-        for (let y = 1; y < height - 1; y++) {
-            for (let x = 1; x < width - 1; x++) {
-                const idx = y * width + x;
-                let maxGradient = 0;
-                let maxDirection = 0;
-
-                // Check each direction
-                for (const [direction, operator] of Object.entries(operators)) {
-                    let gradX = 0;
-                    let gradY = 0;
-
-                    // Apply operator
-                    for (let ky = -1; ky <= 1; ky++) {
-                        for (let kx = -1; kx <= 1; kx++) {
-                            const pixelIdx = (y + ky) * width + (x + kx);
-                            const kernelIdx = (ky + 1) * 3 + (kx + 1);
-                            gradX += blurred[pixelIdx] * operator.x[kernelIdx];
-                            gradY += blurred[pixelIdx] * operator.y[kernelIdx];
-                        }
-                    }
-
-                    // Calculate gradient magnitude for this direction
-                    const gradient = Math.sqrt(gradX * gradX + gradY * gradY);
-                    
-                    // Keep track of strongest gradient
-                    if (gradient > maxGradient) {
-                        maxGradient = gradient;
-                        maxDirection = Math.atan2(gradY, gradX);
-                    }
-                }
-
-                gradientMagnitude[idx] = maxGradient;
-                gradientDirection[idx] = maxDirection;
-            }
+        // Apply exposure compensation if enabled
+        if (useExposureCompensation) {
+            imageData = this.exposureCompensation(imageData, {
+                exposure: 1.0,
+                gamma: 1.0
+            });
         }
 
-        // Enhanced non-maximum suppression
-        const suppressed = this.enhancedNonMaxSuppression(gradientMagnitude, gradientDirection, width, height);
+        // Apply shadow recovery if enabled
+        if (useShadowRecovery) {
+            imageData = this.shadowRecovery(imageData, {
+                shadowRecovery: 0.5,
+                highlightRecovery: 0.5
+            });
+        }
 
-        // Adjust edge detection thresholds for dark scenes
-        const sensitivity = game.settings.get(this.ID, this.SETTINGS.SENSITIVITY) / 100;
-        const minEdgeStrength = game.settings.get(this.ID, this.SETTINGS.MIN_EDGE_STRENGTH) / 100;
-        const maxEdgeStrength = game.settings.get(this.ID, this.SETTINGS.MAX_EDGE_STRENGTH) / 100;
+        // Apply local contrast if enabled
+        if (useLocalContrast) {
+            imageData = this.localContrast(imageData, {
+                localContrast: 0.5,
+                radius: 50
+            });
+        }
 
-        // Adaptive thresholds for dark scenes
-        const lowThreshold = isDarkScene ? 
-            255 * minEdgeStrength * sensitivity * 0.75 : // Lower threshold for dark scenes
-            255 * minEdgeStrength * sensitivity;
-        const highThreshold = isDarkScene ?
-            255 * maxEdgeStrength * sensitivity * 0.85 : // Adjusted high threshold for dark scenes
-            255 * maxEdgeStrength * sensitivity;
+        // Apply noise reduction if enabled
+        if (useNoiseReduction) {
+            imageData = this.noiseReduction(imageData, {
+                strength: 0.5,
+                preserveDetails: true
+            });
+        }
 
+        // Apply edge enhancement if enabled
+        if (useEdgeEnhancement) {
+            imageData = this.edgeEnhancement(imageData, {
+                strength: 0.5,
+                radius: 1
+            });
+        }
+
+        // Apply detail enhancement if enabled
+        if (useDetailEnhancement) {
+            imageData = this.detailEnhancement(imageData, {
+                strength: 0.5,
+                radius: 1
+            });
+        }
+
+        // Apply color correction if enabled
+        if (useColorCorrection) {
+            imageData = this.colorCorrection(imageData, {
+                brightness: 0,
+                contrast: 0,
+                saturation: 0
+            });
+        }
+
+        // Apply sharpening if enabled
+        if (useSharpening) {
+            imageData = this.sharpening(imageData, {
+                strength: 0.5,
+                radius: 1
+            });
+        }
+
+        // Detect edges using optimized Sobel operator
         const edges = [];
-        const visited = new Set();
+        const width = imageData.width;
+        const height = imageData.height;
+        const data = imageData.data;
+        const edgeThreshold = minEdgeStrength * 255;
 
-        // Find strong edges and trace them
-        for (let y = 1; y < height - 1; y++) {
-            for (let x = 1; x < width - 1; x++) {
-                const idx = y * width + x;
-                if (suppressed[idx] >= highThreshold && !visited.has(idx)) {
-                    this.traceEdge(x, y, suppressed, lowThreshold, width, height, visited, edges);
+        // Use typed arrays for better performance
+        const edgeMap = new Uint8Array(width * height);
+        const sobelX = new Int32Array([-1, 0, 1, -2, 0, 2, -1, 0, 1]);
+        const sobelY = new Int32Array([-1, -2, -1, 0, 0, 0, 1, 2, 1]);
+
+        // Process image in chunks for better performance
+        const CHUNK_SIZE = 1000;
+        for (let y = 1; y < height - 1; y += CHUNK_SIZE) {
+            const chunkHeight = Math.min(CHUNK_SIZE, height - y - 1);
+            for (let x = 1; x < width - 1; x += CHUNK_SIZE) {
+                const chunkWidth = Math.min(CHUNK_SIZE, width - x - 1);
+                
+                for (let cy = y; cy < y + chunkHeight; cy++) {
+                    for (let cx = x; cx < x + chunkWidth; cx++) {
+                        const idx = cy * width + cx;
+                        let gx = 0, gy = 0;
+                        
+                        // Apply Sobel operator
+                        for (let ky = -1; ky <= 1; ky++) {
+                            for (let kx = -1; kx <= 1; kx++) {
+                                const pixelIdx = (cy + ky) * width + (cx + kx);
+                                const gray = data[pixelIdx * 4];
+                                gx += gray * sobelX[(ky + 1) * 3 + (kx + 1)];
+                                gy += gray * sobelY[(ky + 1) * 3 + (kx + 1)];
+                            }
+                        }
+                        
+                        const magnitude = Math.sqrt(gx * gx + gy * gy);
+                        if (magnitude > edgeThreshold) {
+                            edgeMap[idx] = 255;
+                            edges.push({ x: cx, y: cy, strength: magnitude });
+                        }
+                    }
                 }
             }
         }
 
         return edges;
+    }
+
+    static enhancePixel(gray, localHist, cumulativeHist, totalPixels) {
+        const bin = Math.floor(gray);
+        const localCDF = localHist.slice(0, bin + 1).reduce((sum, val) => sum + val, 0);
+        const globalCDF = cumulativeHist[bin];
+        const localMax = localHist.reduce((max, val) => Math.max(max, val), 0);
+        const globalMax = cumulativeHist[255];
+        
+        // Combine local and global enhancement
+        const localEnhanced = (localCDF / localMax) * 255;
+        const globalEnhanced = (globalCDF / globalMax) * 255;
+        
+        return (localEnhanced * 0.7 + globalEnhanced * 0.3);
     }
 
     static convertEdgesToWalls(edges) {
@@ -621,15 +701,28 @@ class WallMaker {
         };
     }
 
-    static analyzeSpatialDistribution(points) {
-        // Analyze point distribution using quadtree partitioning
-        const bounds = this.getSegmentBounds(points);
-        const quadtree = this.buildQuadtree(points, bounds);
-        
+    static getSegmentBounds(points) {
+        if (!points || points.length === 0) {
+            return { x: 0, y: 0, width: 0, height: 0 };
+        }
+
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+
+        for (const point of points) {
+            minX = Math.min(minX, point.x);
+            minY = Math.min(minY, point.y);
+            maxX = Math.max(maxX, point.x);
+            maxY = Math.max(maxY, point.y);
+        }
+
         return {
-            uniformity: this.calculateDistributionUniformity(quadtree),
-            density: this.calculateSpatialDensity(quadtree),
-            clustering: this.analyzeClustering(points)
+            x: minX,
+            y: minY,
+            width: maxX - minX,
+            height: maxY - minY
         };
     }
 
@@ -646,8 +739,8 @@ class WallMaker {
             return node;
         }
 
-        const midX = (bounds.minX + bounds.maxX) / 2;
-        const midY = (bounds.minY + bounds.maxY) / 2;
+        const midX = (bounds.x + bounds.width) / 2;
+        const midY = (bounds.y + bounds.height) / 2;
         const subPoints = {
             nw: [], ne: [], sw: [], se: []
         };
@@ -665,20 +758,28 @@ class WallMaker {
         if (points.length > 4) {
             node.children = {
                 nw: this.buildQuadtree(subPoints.nw, {
-                    minX: bounds.minX, maxX: midX,
-                    minY: bounds.minY, maxY: midY
+                    x: bounds.x,
+                    y: bounds.y,
+                    width: midX - bounds.x,
+                    height: midY - bounds.y
                 }, depth + 1, maxDepth),
                 ne: this.buildQuadtree(subPoints.ne, {
-                    minX: midX, maxX: bounds.maxX,
-                    minY: bounds.minY, maxY: midY
+                    x: midX,
+                    y: bounds.y,
+                    width: bounds.width - (midX - bounds.x),
+                    height: midY - bounds.y
                 }, depth + 1, maxDepth),
                 sw: this.buildQuadtree(subPoints.sw, {
-                    minX: bounds.minX, maxX: midX,
-                    minY: midY, maxY: bounds.maxY
+                    x: bounds.x,
+                    y: midY,
+                    width: midX - bounds.x,
+                    height: bounds.height - (midY - bounds.y)
                 }, depth + 1, maxDepth),
                 se: this.buildQuadtree(subPoints.se, {
-                    minX: midX, maxX: bounds.maxX,
-                    minY: midY, maxY: bounds.maxY
+                    x: midX,
+                    y: midY,
+                    width: bounds.width - (midX - bounds.x),
+                    height: bounds.height - (midY - bounds.y)
                 }, depth + 1, maxDepth)
             };
         } else {
@@ -686,6 +787,91 @@ class WallMaker {
         }
 
         return node;
+    }
+
+    static analyzeSpatialDistribution(points) {
+        // Analyze point distribution using quadtree partitioning
+        const bounds = WallMaker.getSegmentBounds(points);
+        const quadtree = WallMaker.buildQuadtree(points, bounds);
+        
+        return {
+            uniformity: WallMaker.calculateDistributionUniformity(quadtree),
+            density: WallMaker.calculateSpatialDensity(quadtree),
+            clustering: WallMaker.analyzeClustering(points)
+        };
+    }
+
+    static calculateDistributionUniformity(quadtree) {
+        if (!quadtree.children) {
+            return 1.0; // Leaf node is perfectly uniform
+        }
+
+        const childUniformities = Object.values(quadtree.children)
+            .map(child => WallMaker.calculateDistributionUniformity(child));
+        
+        const avgUniformity = childUniformities.reduce((a, b) => a + b, 0) / childUniformities.length;
+        
+        // Consider the distribution of points across children
+        const totalPoints = Object.values(quadtree.children)
+            .reduce((sum, child) => sum + (child.points ? child.points.length : 0), 0);
+        
+        const pointDistribution = Object.values(quadtree.children)
+            .map(child => (child.points ? child.points.length : 0) / totalPoints);
+        
+        const distributionVariance = pointDistribution.reduce((sum, p) => 
+            sum + Math.pow(p - 0.25, 2), 0) / 4;
+        
+        return avgUniformity * (1 - distributionVariance);
+    }
+
+    static calculateSpatialDensity(quadtree) {
+        if (!quadtree.children) {
+            const area = quadtree.bounds.width * quadtree.bounds.height;
+            return area > 0 ? (quadtree.points.length / area) : 0;
+        }
+
+        const childDensities = Object.values(quadtree.children)
+            .map(child => WallMaker.calculateSpatialDensity(child));
+        
+        return childDensities.reduce((a, b) => a + b, 0) / childDensities.length;
+    }
+
+    static analyzeClustering(points) {
+        if (points.length < 2) return { clusters: [], density: 0 };
+
+        const clusters = [];
+        const visited = new Set();
+        const threshold = 10; // pixels
+
+        for (let i = 0; i < points.length; i++) {
+            if (visited.has(i)) continue;
+
+            const cluster = [points[i]];
+            visited.add(i);
+
+            // Find all points within threshold distance
+            for (let j = 0; j < points.length; j++) {
+                if (visited.has(j)) continue;
+
+                const distance = this.pointDistance(points[i], points[j]);
+                if (distance <= threshold) {
+                    cluster.push(points[j]);
+                    visited.add(j);
+                }
+            }
+
+            if (cluster.length > 1) {
+                clusters.push(cluster);
+            }
+        }
+
+        // Calculate average cluster density
+        const density = clusters.reduce((sum, cluster) => {
+            const area = Math.PI * Math.pow(threshold, 2);
+            return sum + (cluster.length / area);
+        }, 0) / Math.max(1, clusters.length);
+
+        return { clusters, density };
     }
 
     static analyzeFrequencyPatterns(points) {
@@ -1034,510 +1220,67 @@ class WallMaker {
 
     static async createWalls(walls, scene) {
         const wallType = game.settings.get(this.ID, this.SETTINGS.WALL_TYPE);
+        const BATCH_SIZE = 100; // Process walls in batches to prevent memory issues
         
-        const wallData = walls.map(wall => {
-            const baseData = {
-                c: [
-                    wall.start.x,
-                    wall.start.y,
-                    wall.end.x,
-                    wall.end.y
-                ]
-            };
+        // Prepare wall data in batches
+        const wallBatches = [];
+        for (let i = 0; i < walls.length; i += BATCH_SIZE) {
+            const batch = walls.slice(i, i + BATCH_SIZE).map(wall => {
+                const baseData = {
+                    c: [
+                        wall.start.x,
+                        wall.start.y,
+                        wall.end.x,
+                        wall.end.y
+                    ]
+                };
 
-            if (game.version >= "12") {
-                // v12.7 wall properties with full feature support
-                baseData.type = wallType === "normal" ? "regular" : wallType;
-                baseData.light = CONST.WALL_SENSE_TYPES.NORMAL;
-                baseData.sight = CONST.WALL_SENSE_TYPES.NORMAL;
-                baseData.sound = CONST.WALL_SENSE_TYPES.NORMAL;
-                baseData.move = CONST.WALL_MOVEMENT_TYPES.NORMAL;
-                baseData.dir = CONST.WALL_DIRECTIONS.BOTH;
-                if (wallType === "door") {
-                    baseData.ds = CONST.WALL_DOOR_STATES.CLOSED;
+                if (game.version >= "12") {
+                    baseData.type = wallType === "normal" ? "regular" : wallType;
+                    baseData.light = CONST.WALL_SENSE_TYPES.NORMAL;
+                    baseData.sight = CONST.WALL_SENSE_TYPES.NORMAL;
+                    baseData.sound = CONST.WALL_SENSE_TYPES.NORMAL;
+                    baseData.move = CONST.WALL_MOVEMENT_TYPES.NORMAL;
+                    baseData.dir = CONST.WALL_DIRECTIONS.BOTH;
+                    if (wallType === "door") {
+                        baseData.ds = CONST.WALL_DOOR_STATES.CLOSED;
+                    }
+                } else {
+                    baseData.type = wallType;
+                    if (wallType === "door") {
+                        baseData.ds = 0;
+                    }
                 }
-            } else {
-                // v11 wall properties
-                baseData.type = wallType;
-                if (wallType === "door") {
-                    baseData.ds = 0;
-                }
-            }
 
-            return baseData;
-        });
+                return baseData;
+            });
+            wallBatches.push(batch);
+        }
 
         try {
-            if (game.version >= "12") {
-                await scene.walls.createDocuments(wallData);
-            } else {
-                await scene.createEmbeddedDocuments("Wall", wallData);
+            // Process batches in parallel with a concurrency limit
+            const CONCURRENCY_LIMIT = 3;
+            const results = [];
+            
+            for (let i = 0; i < wallBatches.length; i += CONCURRENCY_LIMIT) {
+                const batchPromises = wallBatches
+                    .slice(i, i + CONCURRENCY_LIMIT)
+                    .map(batch => {
+                        if (game.version >= "12") {
+                            return scene.walls.createDocuments(batch);
+                        } else {
+                            return scene.createEmbeddedDocuments("Wall", batch);
+                        }
+                    });
+                
+                const batchResults = await Promise.all(batchPromises);
+                results.push(...batchResults);
             }
+
             ui.notifications.info(`Created ${walls.length} walls!`);
         } catch (error) {
             console.error("Wall Maker | Error creating walls:", error);
             ui.notifications.error("Error creating walls. Check the console for details.");
-        }
-    }
-
-    // Add helper methods for image enhancement
-    static adaptiveHistogramEqualization(grayscale, width, height, options) {
-        const { clipLimit = 4.0, tileSize = 8, edgePreservation = 0.75 } = options;
-        const enhanced = new Uint8ClampedArray(grayscale);
-        const tilesX = Math.ceil(width / tileSize);
-        const tilesY = Math.ceil(height / tileSize);
-        
-        // Process each tile
-        for (let ty = 0; ty < tilesY; ty++) {
-            for (let tx = 0; tx < tilesX; tx++) {
-                const startX = tx * tileSize;
-                const startY = ty * tileSize;
-                const endX = Math.min(startX + tileSize, width);
-                const endY = Math.min(startY + tileSize, height);
-                
-                // Calculate histogram for this tile
-                const histogram = new Array(256).fill(0);
-                for (let y = startY; y < endY; y++) {
-                    for (let x = startX; x < endX; x++) {
-                        const idx = y * width + x;
-                        histogram[Math.floor(grayscale[idx])]++;
-                    }
-                }
-                
-                // Clip histogram
-                const clipThreshold = Math.floor(clipLimit * (endX - startX) * (endY - startY) / 256);
-                let excess = 0;
-                for (let i = 0; i < 256; i++) {
-                    if (histogram[i] > clipThreshold) {
-                        excess += histogram[i] - clipThreshold;
-                        histogram[i] = clipThreshold;
-                    }
-                }
-                
-                // Redistribute excess
-                const excessPerBin = Math.floor(excess / 256);
-                for (let i = 0; i < 256; i++) {
-                    histogram[i] += excessPerBin;
-                }
-                
-                // Calculate cumulative distribution
-                const cdf = new Array(256);
-                cdf[0] = histogram[0];
-                for (let i = 1; i < 256; i++) {
-                    cdf[i] = cdf[i - 1] + histogram[i];
-                }
-                
-                // Normalize and apply
-                const cdfMin = Math.min(...cdf.filter(v => v > 0));
-                const scale = 255 / (cdf[255] - cdfMin);
-                
-                for (let y = startY; y < endY; y++) {
-                    for (let x = startX; x < endX; x++) {
-                        const idx = y * width + x;
-                        const value = Math.floor(grayscale[idx]);
-                        const newValue = Math.round((cdf[value] - cdfMin) * scale);
-                        enhanced[idx] = Math.min(255, Math.max(0, newValue));
-                    }
-                }
-            }
-        }
-        
-        return enhanced;
-    }
-
-    static exposureCompensation(grayscale, stats, options) {
-        const { shadowRecovery = 0.5, localContrast = 0.5 } = options;
-        const enhanced = new Uint8ClampedArray(grayscale);
-        const { meanBrightness, stdDev } = stats;
-        
-        // Calculate adaptive exposure adjustment
-        const targetBrightness = 128;
-        const exposureAdjust = targetBrightness / meanBrightness;
-        
-        // Calculate local contrast enhancement factor
-        const contrastFactor = 1 + (localContrast * stdDev / 128);
-        
-        // Apply exposure compensation with shadow recovery
-        for (let i = 0; i < grayscale.length; i++) {
-            const value = grayscale[i];
-            let adjusted = value * exposureAdjust;
-            
-            // Enhanced shadow recovery
-            if (value < meanBrightness) {
-                const shadowBoost = shadowRecovery * (meanBrightness - value) / meanBrightness;
-                adjusted = adjusted * (1 + shadowBoost);
-            }
-            
-            // Apply local contrast
-            const centered = adjusted - meanBrightness;
-            adjusted = meanBrightness + centered * contrastFactor;
-            
-            enhanced[i] = Math.min(255, Math.max(0, Math.round(adjusted)));
-        }
-        
-        return enhanced;
-    }
-
-    static shadowRecoveryEnhancement(grayscale, stats, options) {
-        const { strength = 0.5, threshold = 128 } = options;
-        const enhanced = new Uint8ClampedArray(grayscale);
-        const { meanBrightness } = stats;
-        
-        // Calculate shadow regions
-        for (let i = 0; i < grayscale.length; i++) {
-            const value = grayscale[i];
-            if (value < threshold) {
-                // Calculate shadow boost based on darkness level
-                const darkness = (threshold - value) / threshold;
-                const boost = 1 + (strength * darkness);
-                
-                // Apply non-linear boost to preserve details
-                const adjusted = value * boost;
-                enhanced[i] = Math.min(255, Math.max(0, Math.round(adjusted)));
-            } else {
-                enhanced[i] = value;
-            }
-        }
-        
-        return enhanced;
-    }
-
-    static multiScaleEnhancement(grayscale, width, height, options) {
-        const { levels = 3, strength = 0.5 } = options;
-        const enhanced = new Uint8ClampedArray(grayscale);
-        
-        // Create Gaussian pyramid
-        const pyramid = [grayscale];
-        let currentWidth = width;
-        let currentHeight = height;
-        
-        for (let level = 1; level < levels; level++) {
-            currentWidth = Math.floor(currentWidth / 2);
-            currentHeight = Math.floor(currentHeight / 2);
-            const downsampled = new Uint8ClampedArray(currentWidth * currentHeight);
-            
-            // Downsample with Gaussian blur
-            for (let y = 0; y < currentHeight; y++) {
-                for (let x = 0; x < currentWidth; x++) {
-                    const srcX = x * 2;
-                    const srcY = y * 2;
-                    const idx = y * currentWidth + x;
-                    
-                    // Simple 2x2 box filter
-                    const sum = pyramid[level - 1][srcY * (currentWidth * 2) + srcX] +
-                              pyramid[level - 1][srcY * (currentWidth * 2) + srcX + 1] +
-                              pyramid[level - 1][(srcY + 1) * (currentWidth * 2) + srcX] +
-                              pyramid[level - 1][(srcY + 1) * (currentWidth * 2) + srcX + 1];
-                    downsampled[idx] = Math.round(sum / 4);
-                }
-            }
-            
-            pyramid.push(downsampled);
-        }
-        
-        // Process each level
-        for (let level = 0; level < levels; level++) {
-            const levelWidth = Math.floor(width / Math.pow(2, level));
-            const levelHeight = Math.floor(height / Math.pow(2, level));
-            const levelStrength = strength * (1 - level / levels);
-            
-            // Apply local contrast enhancement
-            for (let y = 0; y < levelHeight; y++) {
-                for (let x = 0; x < levelWidth; x++) {
-                    const idx = y * levelWidth + x;
-                    const value = pyramid[level][idx];
-                    
-                    // Calculate local mean
-                    let sum = 0;
-                    let count = 0;
-                    for (let ky = -1; ky <= 1; ky++) {
-                        for (let kx = -1; kx <= 1; kx++) {
-                            const nx = x + kx;
-                            const ny = y + ky;
-                            if (nx >= 0 && nx < levelWidth && ny >= 0 && ny < levelHeight) {
-                                sum += pyramid[level][ny * levelWidth + nx];
-                                count++;
-                            }
-                        }
-                    }
-                    const localMean = sum / count;
-                    
-                    // Enhance contrast
-                    const contrast = (value - localMean) * levelStrength;
-                    pyramid[level][idx] = Math.min(255, Math.max(0, Math.round(localMean + contrast)));
-                }
-            }
-        }
-        
-        // Upsample and combine
-        for (let level = levels - 1; level > 0; level--) {
-            const levelWidth = Math.floor(width / Math.pow(2, level));
-            const levelHeight = Math.floor(height / Math.pow(2, level));
-            
-            for (let y = 0; y < levelHeight; y++) {
-                for (let x = 0; x < levelWidth; x++) {
-                    const srcIdx = y * levelWidth + x;
-                    const dstX = x * 2;
-                    const dstY = y * 2;
-                    
-                    // Simple 2x2 upsampling
-                    const value = pyramid[level][srcIdx];
-                    pyramid[level - 1][dstY * (levelWidth * 2) + dstX] = value;
-                    pyramid[level - 1][dstY * (levelWidth * 2) + dstX + 1] = value;
-                    pyramid[level - 1][(dstY + 1) * (levelWidth * 2) + dstX] = value;
-                    pyramid[level - 1][(dstY + 1) * (levelWidth * 2) + dstX + 1] = value;
-                }
-            }
-        }
-        
-        // Copy final result
-        enhanced.set(pyramid[0]);
-        return enhanced;
-    }
-
-    static combinedEnhancement(grayscale, width, height, options) {
-        const { stats, shadowRecovery, localContrast, noiseReduction, edgePreservation } = options;
-        const enhanced = new Uint8ClampedArray(grayscale);
-        
-        // First pass: shadow recovery
-        const shadowEnhanced = this.shadowRecoveryEnhancement(grayscale, stats, {
-            strength: shadowRecovery,
-            threshold: stats.meanBrightness
-        });
-        
-        // Second pass: local contrast
-        const contrastEnhanced = this.exposureCompensation(shadowEnhanced, stats, {
-            shadowRecovery: 0,
-            localContrast
-        });
-        
-        // Third pass: noise reduction with edge preservation
-        const denoised = this.edgeAwareDenoising(contrastEnhanced, width, height, {
-            noiseReduction,
-            edgePreservation
-        });
-        
-        // Final pass: adaptive histogram equalization
-        const finalEnhanced = this.adaptiveHistogramEqualization(denoised, width, height, {
-            clipLimit: 2.0,
-            tileSize: 16,
-            edgePreservation
-        });
-        
-        enhanced.set(finalEnhanced);
-        return enhanced;
-    }
-
-    static edgeAwareDenoising(grayscale, width, height, options) {
-        const { noiseReduction = 0.3, edgePreservation = 0.75 } = options;
-        const enhanced = new Uint8ClampedArray(grayscale);
-        const kernelSize = 3;
-        const halfKernel = Math.floor(kernelSize / 2);
-        
-        for (let y = halfKernel; y < height - halfKernel; y++) {
-            for (let x = halfKernel; x < width - halfKernel; x++) {
-                const idx = y * width + x;
-                const centerValue = grayscale[idx];
-                
-                // Calculate local statistics
-                let sum = 0;
-                let sumSquared = 0;
-                let count = 0;
-                
-                for (let ky = -halfKernel; ky <= halfKernel; ky++) {
-                    for (let kx = -halfKernel; kx <= halfKernel; kx++) {
-                        const nx = x + kx;
-                        const ny = y + ky;
-                        const nidx = ny * width + nx;
-                        const value = grayscale[nidx];
-                        
-                        sum += value;
-                        sumSquared += value * value;
-                        count++;
-                    }
-                }
-                
-                const mean = sum / count;
-                const variance = (sumSquared / count) - (mean * mean);
-                const stdDev = Math.sqrt(variance);
-                
-                // Calculate edge strength
-                const edgeStrength = Math.abs(centerValue - mean) / stdDev;
-                const isEdge = edgeStrength > edgePreservation;
-                
-                // Apply adaptive filtering
-                if (isEdge) {
-                    // Preserve edge
-                    enhanced[idx] = centerValue;
-                } else {
-                    // Apply noise reduction
-                    const weight = 1 - (noiseReduction * (1 - edgeStrength));
-                    enhanced[idx] = Math.round(centerValue * weight + mean * (1 - weight));
-                }
-            }
-        }
-        
-        return enhanced;
-    }
-
-    static computeAdaptiveThreshold(grayscale, width, height) {
-        const enhanced = new Uint8ClampedArray(grayscale);
-        const blockSize = 11;
-        const C = 2;
-        
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const idx = y * width + x;
-                
-                // Calculate local mean
-                let sum = 0;
-                let count = 0;
-                const halfBlock = Math.floor(blockSize / 2);
-                
-                for (let ky = -halfBlock; ky <= halfBlock; ky++) {
-                    for (let kx = -halfBlock; kx <= halfBlock; kx++) {
-                        const nx = x + kx;
-                        const ny = y + ky;
-                        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                            sum += grayscale[ny * width + nx];
-                            count++;
-                        }
-                    }
-                }
-                
-                const mean = sum / count;
-                enhanced[idx] = grayscale[idx] > (mean - C) ? 255 : 0;
-            }
-        }
-        
-        return enhanced;
-    }
-
-    static adaptiveGaussianBlur(grayscale, width, height, isDarkScene) {
-        const enhanced = new Uint8ClampedArray(grayscale);
-        const kernelSize = isDarkScene ? 5 : 3;
-        const halfKernel = Math.floor(kernelSize / 2);
-        const sigma = isDarkScene ? 1.5 : 1.0;
-        
-        // Precompute Gaussian kernel
-        const kernel = [];
-        let sum = 0;
-        for (let y = -halfKernel; y <= halfKernel; y++) {
-            for (let x = -halfKernel; x <= halfKernel; x++) {
-                const value = Math.exp(-(x * x + y * y) / (2 * sigma * sigma));
-                kernel.push(value);
-                sum += value;
-            }
-        }
-        
-        // Normalize kernel
-        for (let i = 0; i < kernel.length; i++) {
-            kernel[i] /= sum;
-        }
-        
-        // Apply Gaussian blur
-        for (let y = halfKernel; y < height - halfKernel; y++) {
-            for (let x = halfKernel; x < width - halfKernel; x++) {
-                const idx = y * width + x;
-                let sum = 0;
-                let kernelIdx = 0;
-                
-                for (let ky = -halfKernel; ky <= halfKernel; ky++) {
-                    for (let kx = -halfKernel; kx <= halfKernel; kx++) {
-                        const nx = x + kx;
-                        const ny = y + ky;
-                        sum += grayscale[ny * width + nx] * kernel[kernelIdx++];
-                    }
-                }
-                
-                enhanced[idx] = Math.round(sum);
-            }
-        }
-        
-        return enhanced;
-    }
-
-    static enhancedNonMaxSuppression(gradientMagnitude, gradientDirection, width, height) {
-        const enhanced = new Float32Array(gradientMagnitude);
-        const angleStep = Math.PI / 8;
-        
-        for (let y = 1; y < height - 1; y++) {
-            for (let x = 1; x < width - 1; x++) {
-                const idx = y * width + x;
-                const angle = gradientDirection[idx];
-                const magnitude = gradientMagnitude[idx];
-                
-                // Quantize angle to nearest 45 degrees
-                const quantizedAngle = Math.round(angle / angleStep) * angleStep;
-                
-                // Determine neighbors to compare
-                let nx1, ny1, nx2, ny2;
-                if (Math.abs(quantizedAngle) < angleStep || Math.abs(quantizedAngle - Math.PI) < angleStep) {
-                    // Horizontal
-                    nx1 = x - 1; ny1 = y;
-                    nx2 = x + 1; ny2 = y;
-                } else if (Math.abs(quantizedAngle - Math.PI/2) < angleStep) {
-                    // Vertical
-                    nx1 = x; ny1 = y - 1;
-                    nx2 = x; ny2 = y + 1;
-                } else if (Math.abs(quantizedAngle - Math.PI/4) < angleStep) {
-                    // Diagonal 45
-                    nx1 = x - 1; ny1 = y - 1;
-                    nx2 = x + 1; ny2 = y + 1;
-                } else {
-                    // Diagonal 135
-                    nx1 = x - 1; ny1 = y + 1;
-                    nx2 = x + 1; ny2 = y - 1;
-                }
-                
-                // Suppress non-maximum values
-                const mag1 = gradientMagnitude[ny1 * width + nx1];
-                const mag2 = gradientMagnitude[ny2 * width + nx2];
-                
-                if (magnitude < mag1 || magnitude < mag2) {
-                    enhanced[idx] = 0;
-                }
-            }
-        }
-        
-        return enhanced;
-    }
-
-    static traceEdge(x, y, suppressed, lowThreshold, width, height, visited, edges) {
-        const stack = [[x, y]];
-        const currentEdge = [];
-        
-        while (stack.length > 0) {
-            const [cx, cy] = stack.pop();
-            const idx = cy * width + cx;
-            
-            if (visited.has(idx)) continue;
-            visited.add(idx);
-            
-            if (suppressed[idx] >= lowThreshold) {
-                currentEdge.push({ x: cx, y: cy });
-                
-                // Check 8-connected neighbors
-                for (let ky = -1; ky <= 1; ky++) {
-                    for (let kx = -1; kx <= 1; kx++) {
-                        if (kx === 0 && ky === 0) continue;
-                        
-                        const nx = cx + kx;
-                        const ny = cy + ky;
-                        
-                        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                            const nidx = ny * width + nx;
-                            if (!visited.has(nidx) && suppressed[nidx] >= lowThreshold) {
-                                stack.push([nx, ny]);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        if (currentEdge.length > 0) {
-            edges.push(currentEdge);
         }
     }
 
@@ -1837,6 +1580,138 @@ class WallMaker {
         const dx = p2.x - p1.x;
         const dy = p2.y - p1.y;
         return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    // Add ProgressBar class
+    static ProgressBar = class {
+        constructor({label, psteps}) {
+            this.label = label;
+            this.psteps = psteps;
+            this.currentStep = 0;
+            this.element = null;
+            this.initialize();
+        }
+
+        initialize() {
+            // Clean up any existing progress bars
+            const existingBars = document.querySelectorAll('.wall-maker-progress');
+            existingBars.forEach(bar => bar.remove());
+
+            // Create new progress bar
+            const div = document.createElement("div");
+            div.className = "wall-maker-progress";
+            div.innerHTML = `
+                <div class="progress-label">${this.label}</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: 0%"></div>
+                </div>
+                <div class="progress-text">Starting...</div>
+            `;
+
+            // Ensure the progress bar is added to Foundry's UI layer
+            const uiTop = document.getElementById('ui-top');
+            if (uiTop) {
+                uiTop.appendChild(div);
+            } else {
+                document.body.appendChild(div);
+            }
+            this.element = div;
+
+            // Force layout recalculation
+            void this.element.offsetHeight;
+        }
+
+        advance(message) {
+            if (!this.element) return;
+            
+            this.currentStep++;
+            const percent = Math.min(100, Math.round((this.currentStep / this.psteps) * 100));
+            
+            const fill = this.element.querySelector('.progress-fill');
+            const text = this.element.querySelector('.progress-text');
+            
+            if (fill && text) {
+                fill.style.width = `${percent}%`;
+                text.textContent = `${message} (${percent}%)`;
+            }
+        }
+
+        close() {
+            if (!this.element) return;
+            
+            this.element.style.opacity = '0';
+            
+            setTimeout(() => {
+                if (this.element && this.element.parentNode) {
+                    this.element.remove();
+                }
+            }, 300);
+        }
+    };
+
+    static analyzeTextureDensity(points) {
+        if (!points || points.length < 2) return 0;
+
+        // Calculate average distance between points
+        let totalDistance = 0;
+        let count = 0;
+        
+        for (let i = 0; i < points.length - 1; i++) {
+            for (let j = i + 1; j < points.length; j++) {
+                totalDistance += this.pointDistance(points[i], points[j]);
+                count++;
+            }
+        }
+
+        const avgDistance = totalDistance / count;
+        
+        // Calculate area covered by points
+        const bounds = this.getSegmentBounds(points);
+        const area = bounds.width * bounds.height;
+        
+        // Return density measure (lower value = more dense)
+        return area > 0 ? (avgDistance / Math.sqrt(area)) : 0;
+    }
+
+    static analyzeScaleInvariantFeatures(points) {
+        if (!points || points.length < 3) return {};
+
+        // Calculate relative distances and angles
+        const features = [];
+        const center = {
+            x: points.reduce((sum, p) => sum + p.x, 0) / points.length,
+            y: points.reduce((sum, p) => sum + p.y, 0) / points.length
+        };
+
+        // Calculate features relative to center
+        for (const point of points) {
+            const dx = point.x - center.x;
+            const dy = point.y - center.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const angle = Math.atan2(dy, dx);
+            
+            features.push({
+                distance,
+                angle,
+                relativeX: dx / distance,
+                relativeY: dy / distance
+            });
+        }
+
+        // Calculate feature statistics
+        const distances = features.map(f => f.distance);
+        const angles = features.map(f => f.angle);
+        
+        const avgDistance = distances.reduce((a, b) => a + b, 0) / distances.length;
+        const distanceVariance = distances.reduce((sum, d) => 
+            sum + Math.pow(d - avgDistance, 2), 0) / distances.length;
+        
+        return {
+            features,
+            avgDistance,
+            distanceVariance,
+            angleVariance: this.calculateAngleVariance(angles)
+        };
     }
 }
 
