@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.1] - 2024-03-19
+### Fixed
+- Scene#data deprecation warning for V10+ compatibility
+- Added missing calculateImageStats method
+- Improved scene image handling for V12.7
+
 ## [1.0.0] - 2024-03-19
 ### Added
 - Initial release
