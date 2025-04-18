@@ -580,9 +580,42 @@ class WallMaker {
         const height = imageData.height;
         const data = imageData.data;
         
-        // Adjust threshold based on sensitivity
-        const edgeThreshold = minEdgeStrength * 255 * (1 + (1 - sensitivity));
+        // Create a grayscale buffer for better performance
+        const grayscale = new Uint8Array(width * height);
+        for (let i = 0; i < data.length; i += 4) {
+            const idx = i / 4;
+            // Use weighted grayscale conversion for better contrast
+            grayscale[idx] = Math.round(
+                0.299 * data[i] +     // Red
+                0.587 * data[i + 1] + // Green
+                0.114 * data[i + 2]   // Blue
+            );
+        }
+
+        // Calculate image statistics for adaptive processing
+        const stats = this.calculateImageStats(grayscale);
+        const { meanBrightness, stdDev, min, max } = stats;
+
+        // Apply adaptive contrast enhancement
+        const contrastRange = max - min;
+        const contrastFactor = 1.0 + (sensitivity / 50) * (1 + stdDev / 128);
+        const brightnessAdjust = 128 - meanBrightness;
         
+        // Pre-calculate lookup table for contrast enhancement
+        const contrastLUT = new Uint8Array(256);
+        for (let i = 0; i < 256; i++) {
+            const normalized = (i - min) / contrastRange;
+            const enhanced = normalized * 255;
+            contrastLUT[i] = Math.min(255, Math.max(0, 
+                ((enhanced - 128 + brightnessAdjust) * contrastFactor) + 128
+            ));
+        }
+
+        // Apply contrast enhancement using lookup table
+        for (let i = 0; i < grayscale.length; i++) {
+            grayscale[i] = contrastLUT[grayscale[i]];
+        }
+
         // Use typed arrays for better performance
         const edgeMap = new Uint8Array(width * height);
         const sobelX = new Int32Array([-1, 0, 1, -2, 0, 2, -1, 0, 1]);
@@ -595,6 +628,13 @@ class WallMaker {
                 kernelOffsets.push(ky * width + kx);
             }
         }
+
+        // Calculate adaptive threshold based on image statistics
+        const adaptiveThreshold = Math.max(
+            minEdgeStrength * 255 * (1 - sensitivity / 100),
+            meanBrightness * 0.5,
+            stdDev * 2
+        );
 
         // Process image in chunks for better performance
         const CHUNK_SIZE = 1000;
@@ -611,27 +651,111 @@ class WallMaker {
                         // Apply Sobel operator using pre-calculated offsets
                         for (let i = 0; i < 9; i++) {
                             const pixelIdx = idx + kernelOffsets[i];
-                            const gray = data[pixelIdx * 4];
+                            const gray = grayscale[pixelIdx];
                             gx += gray * sobelX[i];
                             gy += gray * sobelY[i];
                         }
                         
                         const magnitude = Math.sqrt(gx * gx + gy * gy);
-                        if (magnitude > edgeThreshold) {
-                            edgeMap[idx] = 255;
-                            edges.push({ 
-                                x: cx, 
-                                y: cy, 
-                                strength: magnitude,
-                                direction: Math.atan2(gy, gx)
-                            });
+                        if (magnitude > adaptiveThreshold) {
+                            // Calculate edge direction and normalize
+                            const direction = Math.atan2(gy, gx);
+                            const normalizedMagnitude = magnitude / 255;
+                            
+                            // Only add edge if it's significantly stronger than its neighbors
+                            let isLocalMax = true;
+                            let neighborCount = 0;
+                            let neighborSum = 0;
+                            
+                            for (let i = 0; i < 9; i++) {
+                                if (i === 4) continue; // Skip center pixel
+                                const neighborIdx = idx + kernelOffsets[i];
+                                const neighborStrength = edgeMap[neighborIdx];
+                                if (neighborStrength > 0) {
+                                    neighborCount++;
+                                    neighborSum += neighborStrength;
+                                }
+                                if (neighborStrength > normalizedMagnitude) {
+                                    isLocalMax = false;
+                                    break;
+                                }
+                            }
+                            
+                            // Additional check for isolated edges with improved threshold
+                            if (isLocalMax && (neighborCount === 0 || 
+                                normalizedMagnitude > (neighborSum / neighborCount) * 1.5)) {
+                                edgeMap[idx] = normalizedMagnitude;
+                                edges.push({ 
+                                    x: cx, 
+                                    y: cy, 
+                                    strength: normalizedMagnitude,
+                                    direction: direction
+                                });
+                            }
                         }
                     }
                 }
             }
         }
 
-        return edges;
+        // Post-process edges to remove noise and enhance continuity
+        const processedEdges = [];
+        const visited = new Set();
+        const directionThreshold = Math.PI / 8; // 22.5 degrees
+        
+        // Pre-calculate direction differences for better performance
+        const directionDiffs = new Map();
+        
+        for (const edge of edges) {
+            if (visited.has(`${edge.x},${edge.y}`)) continue;
+            
+            // Group connected edges
+            const segment = [edge];
+            visited.add(`${edge.x},${edge.y}`);
+            
+            // Look for connected edges in 8 directions
+            const directions = [
+                [-1, -1], [0, -1], [1, -1],
+                [-1, 0],          [1, 0],
+                [-1, 1],  [0, 1],  [1, 1]
+            ];
+            
+            for (const [dx, dy] of directions) {
+                const nx = edge.x + dx;
+                const ny = edge.y + dy;
+                const key = `${nx},${ny}`;
+                
+                if (nx >= 0 && nx < width && ny >= 0 && ny < height && 
+                    !visited.has(key) && edgeMap[ny * width + nx] > 0) {
+                    const connectedEdge = edges.find(e => e.x === nx && e.y === ny);
+                    if (connectedEdge) {
+                        // Check if edges have similar direction using cached differences
+                        const diffKey = `${edge.direction},${connectedEdge.direction}`;
+                        let angleDiff = directionDiffs.get(diffKey);
+                        if (angleDiff === undefined) {
+                            angleDiff = Math.abs(edge.direction - connectedEdge.direction);
+                            directionDiffs.set(diffKey, angleDiff);
+                        }
+                        
+                        if (angleDiff < directionThreshold || 
+                            angleDiff > Math.PI - directionThreshold) {
+                            segment.push(connectedEdge);
+                            visited.add(key);
+                        }
+                    }
+                }
+            }
+            
+            // Only keep segments with sufficient length and strength
+            if (segment.length >= 3) {
+                const avgStrength = segment.reduce((sum, e) => sum + e.strength, 0) / segment.length;
+                if (avgStrength > adaptiveThreshold / 255) {
+                    processedEdges.push(...segment);
+                }
+            }
+        }
+
+        return processedEdges;
     }
 
     static enhancePixel(gray, localHist, cumulativeHist, totalPixels) {
