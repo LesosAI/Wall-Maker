@@ -288,9 +288,8 @@ class WallMaker {
             return;
         }
 
-        const texturePath = game.version >= "12" ?
-            (currentScene.background?.src || currentScene.img) :
-            (currentScene.img || currentScene.data?.img);
+        // Updated scene image access for V10+ compatibility
+        const texturePath = currentScene.background?.src || currentScene.img;
 
         if (!texturePath) {
             ui.notifications.error("Scene has no background image!");
@@ -307,6 +306,51 @@ class WallMaker {
         const edges = await this.detectEdges(img);
         const walls = this.convertEdgesToWalls(edges);
         await this.createWalls(walls, currentScene);
+    }
+
+    static calculateImageStats(grayscale) {
+        let sum = 0;
+        let min = Infinity;
+        let max = -Infinity;
+        const histogram = new Array(256).fill(0);
+
+        // Calculate basic statistics
+        for (let i = 0; i < grayscale.length; i++) {
+            const value = grayscale[i];
+            sum += value;
+            min = Math.min(min, value);
+            max = Math.max(max, value);
+            histogram[Math.floor(value)] = (histogram[Math.floor(value)] || 0) + 1;
+        }
+
+        const meanBrightness = sum / grayscale.length;
+
+        // Calculate median and standard deviation
+        let count = 0;
+        let median = 0;
+        const midPoint = grayscale.length / 2;
+        
+        for (let i = 0; i < histogram.length; i++) {
+            count += histogram[i];
+            if (count >= midPoint && median === 0) {
+                median = i;
+            }
+        }
+
+        let variance = 0;
+        for (let i = 0; i < grayscale.length; i++) {
+            variance += Math.pow(grayscale[i] - meanBrightness, 2);
+        }
+        const stdDev = Math.sqrt(variance / grayscale.length);
+
+        return {
+            meanBrightness,
+            median,
+            stdDev,
+            min,
+            max,
+            histogram
+        };
     }
 
     static async loadSceneImage(src) {
@@ -1034,6 +1078,73 @@ class WallMaker {
             console.error("Wall Maker | Error creating walls:", error);
             ui.notifications.error("Error creating walls. Check the console for details.");
         }
+    }
+
+    // Add helper methods for image enhancement
+    static adaptiveHistogramEqualization(grayscale, width, height, options) {
+        const { clipLimit = 4.0, tileSize = 8, edgePreservation = 0.75 } = options;
+        // Implementation of adaptive histogram equalization
+        // This is a placeholder - actual implementation would go here
+        return grayscale;
+    }
+
+    static exposureCompensation(grayscale, stats, options) {
+        const { shadowRecovery = 0.5, localContrast = 0.5 } = options;
+        // Implementation of exposure compensation
+        // This is a placeholder - actual implementation would go here
+        return grayscale;
+    }
+
+    static shadowRecoveryEnhancement(grayscale, stats, options) {
+        const { strength = 0.5, threshold = 128 } = options;
+        // Implementation of shadow recovery
+        // This is a placeholder - actual implementation would go here
+        return grayscale;
+    }
+
+    static multiScaleEnhancement(grayscale, width, height, options) {
+        const { levels = 3, strength = 0.5 } = options;
+        // Implementation of multi-scale enhancement
+        // This is a placeholder - actual implementation would go here
+        return grayscale;
+    }
+
+    static combinedEnhancement(grayscale, width, height, options) {
+        const { stats, shadowRecovery, localContrast, noiseReduction, edgePreservation } = options;
+        // Implementation of combined enhancement methods
+        // This is a placeholder - actual implementation would go here
+        return grayscale;
+    }
+
+    static edgeAwareDenoising(grayscale, width, height, options) {
+        const { noiseReduction = 0.3, edgePreservation = 0.75 } = options;
+        // Implementation of edge-aware denoising
+        // This is a placeholder - actual implementation would go here
+        return grayscale;
+    }
+
+    static computeAdaptiveThreshold(grayscale, width, height) {
+        // Implementation of adaptive thresholding
+        // This is a placeholder - actual implementation would go here
+        return grayscale;
+    }
+
+    static adaptiveGaussianBlur(grayscale, width, height, isDarkScene) {
+        // Implementation of adaptive Gaussian blur
+        // This is a placeholder - actual implementation would go here
+        return grayscale;
+    }
+
+    static enhancedNonMaxSuppression(gradientMagnitude, gradientDirection, width, height) {
+        // Implementation of enhanced non-maximum suppression
+        // This is a placeholder - actual implementation would go here
+        return gradientMagnitude;
+    }
+
+    static traceEdge(x, y, suppressed, lowThreshold, width, height, visited, edges) {
+        // Implementation of edge tracing
+        // This is a placeholder - actual implementation would go here
+        edges.push({ x, y });
     }
 }
 
