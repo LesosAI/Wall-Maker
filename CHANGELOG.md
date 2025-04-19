@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.0.6] - 2024-04-18
+## [1.0.6] - 2024-04-19
 ### Added
 - Enhanced edge detection with lookup table optimization for contrast enhancement
 - Implemented direction difference caching for improved performance
@@ -8,6 +8,11 @@
 - Improved edge detection accuracy with better noise reduction
 - Optimized chunk-based processing for large scenes
 - Enhanced V12 compatibility and performance
+- Added structured error handling with error codes and detailed messages
+- Implemented better error recovery mechanisms
+- Added input validation for critical methods
+- Enhanced WebGL error handling with specific error codes
+- Improved error context and debugging information
 
 ### Fixed
 - Improved contrast handling in dark scenes
@@ -15,6 +20,19 @@
 - Better handling of isolated edges
 - Optimized memory usage during edge detection
 - Improved edge direction similarity detection
+- Fixed inconsistent error handling patterns
+- Resolved missing error context in error messages
+- Fixed error recovery inconsistencies
+- Improved type checking for input parameters
+- Enhanced error propagation in CPU edge detection
+- Fixed WebGL resource cleanup issues
+
+### Changed
+- Standardized error handling across all methods
+- Improved error message formatting and detail
+- Enhanced error recovery with fallback mechanisms
+- Optimized error logging with better context
+- Improved method parameter validation
 
 ## [1.0.5] - 2024-04-18
 ### Added

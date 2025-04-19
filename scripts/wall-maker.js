@@ -434,328 +434,138 @@ class WallMaker {
     }
 
     static async detectEdges(imageData, options = {}) {
-        const {
-            sensitivity = this.SENSITIVITY,
-            minEdgeStrength = this.MIN_EDGE_STRENGTH,
-            useAdaptiveHistogram = true,
-            useExposureCompensation = true,
-            useShadowRecovery = true,
-            useLocalContrast = true,
-            useNoiseReduction = true,
-            useEdgeEnhancement = true,
-            useDetailEnhancement = true,
-            useColorCorrection = true,
-            useSharpening = true
-        } = options;
-
-        // Validate input
-        if (!imageData || !(imageData instanceof ImageData)) {
-            throw new Error('Invalid image data provided to detectEdges');
+        if (!imageData || !imageData.data || !imageData.width || !imageData.height) {
+            throw new Error('WALL_MAKER_INVALID_IMAGE_DATA: Invalid image data provided. Must have valid data, width, and height.');
         }
 
-        // Create canvas for processing
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        
-        // Set canvas dimensions to match image data
-        canvas.width = imageData.width;
-        canvas.height = imageData.height;
-        
-        // Create a new ImageData to ensure we have valid data
-        const validImageData = new ImageData(
-            new Uint8ClampedArray(imageData.data),
-            imageData.width,
-            imageData.height
-        );
-        
-        // Put the image data into the canvas
-        ctx.putImageData(validImageData, 0, 0);
-
-        // Convert to grayscale using WebGL for better performance
-        const gl = canvas.getContext('webgl', { preserveDrawingBuffer: true });
-        if (!gl) {
-            console.warn('WebGL not available, falling back to CPU processing');
-            // Fallback to CPU processing
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            return this.processEdgesCPU(imageData, sensitivity, minEdgeStrength);
-        }
-
-        // Create and configure texture
-        const texture = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, texture);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, validImageData);
-
-        // Create framebuffer
-        const framebuffer = gl.createFramebuffer();
-        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-        const renderTexture = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, renderTexture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, canvas.width, canvas.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, renderTexture, 0);
-
-        // Create shader program
-        const vertexShader = gl.createShader(gl.VERTEX_SHADER);
-        gl.shaderSource(vertexShader, `
-            attribute vec2 position;
-            void main() {
-                gl_Position = vec4(position, 0, 1);
+        try {
+            // Initialize WebGL context
+            const canvas = document.createElement('canvas');
+            canvas.width = imageData.width;
+            canvas.height = imageData.height;
+            const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true });
+            
+            if (!gl) {
+                console.warn('WALL_MAKER_WEBGL_UNAVAILABLE: WebGL2 not available, falling back to CPU edge detection');
+                return this.processEdgesCPU(imageData, options);
             }
-        `);
-        gl.compileShader(vertexShader);
-        
-        if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
-            console.error('Vertex shader compilation error:', gl.getShaderInfoLog(vertexShader));
-            gl.deleteShader(vertexShader);
-            return this.processEdgesCPU(imageData, sensitivity, minEdgeStrength);
-        }
 
-        const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
-        gl.shaderSource(fragmentShader, `
-            precision highp float;
-            uniform sampler2D texture;
-            void main() {
-                vec4 color = texture2D(texture, gl_FragCoord.xy / vec2(${canvas.width}, ${canvas.height}));
-                float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-                gl_FragColor = vec4(vec3(gray), 1.0);
+            // Compile shaders
+            const vertexShader = this.compileShader(gl, gl.VERTEX_SHADER, this.vertexShaderSource);
+            const fragmentShader = this.compileShader(gl, gl.FRAGMENT_SHADER, this.fragmentShaderSource);
+            
+            if (!vertexShader || !fragmentShader) {
+                throw new Error('WALL_MAKER_SHADER_COMPILE_ERROR: Failed to compile shaders. Check shader source code.');
             }
-        `);
-        gl.compileShader(fragmentShader);
-        
-        if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
-            console.error('Fragment shader compilation error:', gl.getShaderInfoLog(fragmentShader));
-            gl.deleteShader(vertexShader);
-            gl.deleteShader(fragmentShader);
-            return this.processEdgesCPU(imageData, sensitivity, minEdgeStrength);
-        }
 
-        const program = gl.createProgram();
-        gl.attachShader(program, vertexShader);
-        gl.attachShader(program, fragmentShader);
-        gl.linkProgram(program);
-        
-        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-            console.error('Program linking error:', gl.getProgramInfoLog(program));
+            // Create and link program
+            const program = gl.createProgram();
+            gl.attachShader(program, vertexShader);
+            gl.attachShader(program, fragmentShader);
+            gl.linkProgram(program);
+
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                throw new Error('WALL_MAKER_PROGRAM_LINK_ERROR: Failed to link shader program. Check shader compatibility.');
+            }
+
+            // Clean up WebGL resources
             gl.deleteShader(vertexShader);
             gl.deleteShader(fragmentShader);
             gl.deleteProgram(program);
-            return this.processEdgesCPU(imageData, sensitivity, minEdgeStrength);
+            canvas.remove();
+
+            return this.processEdgesCPU(imageData, options);
+        } catch (error) {
+            console.error('WALL_MAKER_EDGE_DETECTION_ERROR:', error);
+            return this.processEdgesCPU(imageData, options);
         }
-
-        // Create vertex buffer
-        const buffer = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-        const positionLocation = gl.getAttribLocation(program, 'position');
-        gl.enableVertexAttribArray(positionLocation);
-        gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
-
-        // Draw to framebuffer
-        gl.viewport(0, 0, canvas.width, canvas.height);
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-        // Read back the processed image
-        const processedImageData = new ImageData(canvas.width, canvas.height);
-        gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, processedImageData.data);
-
-        // Clean up WebGL resources
-        gl.deleteTexture(texture);
-        gl.deleteTexture(renderTexture);
-        gl.deleteFramebuffer(framebuffer);
-        gl.deleteBuffer(buffer);
-        gl.deleteProgram(program);
-        gl.deleteShader(vertexShader);
-        gl.deleteShader(fragmentShader);
-
-        // Process edges using the grayscale image
-        return this.processEdgesCPU(processedImageData, sensitivity, minEdgeStrength);
     }
 
-    static processEdgesCPU(imageData, sensitivity, minEdgeStrength) {
-        const edges = [];
-        const width = imageData.width;
-        const height = imageData.height;
-        const data = imageData.data;
-        
-        // Create a grayscale buffer for better performance
-        const grayscale = new Uint8Array(width * height);
-        for (let i = 0; i < data.length; i += 4) {
-            const idx = i / 4;
-            // Use weighted grayscale conversion for better contrast
-            grayscale[idx] = Math.round(
-                0.299 * data[i] +     // Red
-                0.587 * data[i + 1] + // Green
-                0.114 * data[i + 2]   // Blue
-            );
+    static processEdgesCPU(imageData, options = {}) {
+        if (!imageData || !imageData.data || !imageData.width || !imageData.height) {
+            throw new Error('WALL_MAKER_INVALID_IMAGE_DATA: Invalid image data provided. Must have valid data, width, and height.');
         }
 
-        // Calculate image statistics for adaptive processing
-        const stats = this.calculateImageStats(grayscale);
-        const { meanBrightness, stdDev, min, max } = stats;
-
-        // Apply adaptive contrast enhancement
-        const contrastRange = max - min;
-        const contrastFactor = 1.0 + (sensitivity / 50) * (1 + stdDev / 128);
-        const brightnessAdjust = 128 - meanBrightness;
+        const { width, height } = imageData;
+        const pixels = new Uint8Array(imageData.data);
+        const edges = new Uint8Array(width * height);
         
-        // Pre-calculate lookup table for contrast enhancement
-        const contrastLUT = new Uint8Array(256);
-        for (let i = 0; i < 256; i++) {
-            const normalized = (i - min) / contrastRange;
-            const enhanced = normalized * 255;
-            contrastLUT[i] = Math.min(255, Math.max(0, 
-                ((enhanced - 128 + brightnessAdjust) * contrastFactor) + 128
-            ));
-        }
-
-        // Apply contrast enhancement using lookup table
-        for (let i = 0; i < grayscale.length; i++) {
-            grayscale[i] = contrastLUT[grayscale[i]];
-        }
-
-        // Use typed arrays for better performance
-        const edgeMap = new Uint8Array(width * height);
-        const sobelX = new Int32Array([-1, 0, 1, -2, 0, 2, -1, 0, 1]);
-        const sobelY = new Int32Array([-1, -2, -1, 0, 0, 0, 1, 2, 1]);
-        
-        // Pre-calculate kernel offsets for better performance
-        const kernelOffsets = [];
-        for (let ky = -1; ky <= 1; ky++) {
-            for (let kx = -1; kx <= 1; kx++) {
-                kernelOffsets.push(ky * width + kx);
+        try {
+            // Convert to grayscale with weighted RGB values
+            const grayscale = new Uint8Array(width * height);
+            for (let i = 0; i < pixels.length; i += 4) {
+                grayscale[i / 4] = Math.round(
+                    0.299 * pixels[i] +     // Red
+                    0.587 * pixels[i + 1] + // Green
+                    0.114 * pixels[i + 2]   // Blue
+                );
             }
-        }
 
-        // Calculate adaptive threshold based on image statistics
-        const adaptiveThreshold = Math.max(
-            minEdgeStrength * 255 * (1 - sensitivity / 100),
-            meanBrightness * 0.5,
-            stdDev * 2
-        );
+            // Apply Sobel operator
+            const sobelX = [-1, 0, 1, -2, 0, 2, -1, 0, 1];
+            const sobelY = [-1, -2, -1, 0, 0, 0, 1, 2, 1];
 
-        // Process image in chunks for better performance
-        const CHUNK_SIZE = 1000;
-        for (let y = 1; y < height - 1; y += CHUNK_SIZE) {
-            const chunkHeight = Math.min(CHUNK_SIZE, height - y - 1);
-            for (let x = 1; x < width - 1; x += CHUNK_SIZE) {
-                const chunkWidth = Math.min(CHUNK_SIZE, width - x - 1);
-                
-                for (let cy = y; cy < y + chunkHeight; cy++) {
-                    for (let cx = x; cx < x + chunkWidth; cx++) {
-                        const idx = cy * width + cx;
-                        let gx = 0, gy = 0;
-                        
-                        // Apply Sobel operator using pre-calculated offsets
-                        for (let i = 0; i < 9; i++) {
-                            const pixelIdx = idx + kernelOffsets[i];
-                            const gray = grayscale[pixelIdx];
-                            gx += gray * sobelX[i];
-                            gy += gray * sobelY[i];
-                        }
-                        
-                        const magnitude = Math.sqrt(gx * gx + gy * gy);
-                        if (magnitude > adaptiveThreshold) {
-                            // Calculate edge direction and normalize
-                            const direction = Math.atan2(gy, gx);
-                            const normalizedMagnitude = magnitude / 255;
-                            
-                            // Only add edge if it's significantly stronger than its neighbors
-                            let isLocalMax = true;
-                            let neighborCount = 0;
-                            let neighborSum = 0;
-                            
-                            for (let i = 0; i < 9; i++) {
-                                if (i === 4) continue; // Skip center pixel
-                                const neighborIdx = idx + kernelOffsets[i];
-                                const neighborStrength = edgeMap[neighborIdx];
-                                if (neighborStrength > 0) {
-                                    neighborCount++;
-                                    neighborSum += neighborStrength;
-                                }
-                                if (neighborStrength > normalizedMagnitude) {
-                                    isLocalMax = false;
-                                    break;
-                                }
-                            }
-                            
-                            // Additional check for isolated edges with improved threshold
-                            if (isLocalMax && (neighborCount === 0 || 
-                                normalizedMagnitude > (neighborSum / neighborCount) * 1.5)) {
-                                edgeMap[idx] = normalizedMagnitude;
-                                edges.push({ 
-                                    x: cx, 
-                                    y: cy, 
-                                    strength: normalizedMagnitude,
-                                    direction: direction
-                                });
-                            }
+            for (let y = 1; y < height - 1; y++) {
+                for (let x = 1; x < width - 1; x++) {
+                    let gx = 0;
+                    let gy = 0;
+
+                    for (let ky = -1; ky <= 1; ky++) {
+                        for (let kx = -1; kx <= 1; kx++) {
+                            const idx = (y + ky) * width + (x + kx);
+                            const weight = grayscale[idx];
+                            gx += weight * sobelX[(ky + 1) * 3 + (kx + 1)];
+                            gy += weight * sobelY[(ky + 1) * 3 + (kx + 1)];
                         }
                     }
+
+                    const magnitude = Math.sqrt(gx * gx + gy * gy);
+                    edges[y * width + x] = Math.min(255, magnitude);
                 }
             }
+
+            return edges;
+        } catch (error) {
+            console.error('WALL_MAKER_CPU_EDGE_DETECTION_ERROR:', error);
+            throw new Error('WALL_MAKER_CPU_EDGE_DETECTION_ERROR: Failed to process edges on CPU. ' + error.message);
+        }
+    }
+
+    static analyzeAdvancedPatterns(points) {
+        if (!points || !Array.isArray(points) || points.length < 3) {
+            throw new Error('WALL_MAKER_INVALID_POINTS: Invalid points array provided. Must be an array with at least 3 points.');
         }
 
-        // Post-process edges to remove noise and enhance continuity
-        const processedEdges = [];
-        const visited = new Set();
-        const directionThreshold = Math.PI / 8; // 22.5 degrees
-        
-        // Pre-calculate direction differences for better performance
-        const directionDiffs = new Map();
-        
-        for (const edge of edges) {
-            if (visited.has(`${edge.x},${edge.y}`)) continue;
-            
-            // Group connected edges
-            const segment = [edge];
-            visited.add(`${edge.x},${edge.y}`);
-            
-            // Look for connected edges in 8 directions
-            const directions = [
-                [-1, -1], [0, -1], [1, -1],
-                [-1, 0],          [1, 0],
-                [-1, 1],  [0, 1],  [1, 1]
-            ];
-            
-            for (const [dx, dy] of directions) {
-                const nx = edge.x + dx;
-                const ny = edge.y + dy;
-                const key = `${nx},${ny}`;
-                
-                if (nx >= 0 && nx < width && ny >= 0 && ny < height && 
-                    !visited.has(key) && edgeMap[ny * width + nx] > 0) {
-                    const connectedEdge = edges.find(e => e.x === nx && e.y === ny);
-                    if (connectedEdge) {
-                        // Check if edges have similar direction using cached differences
-                        const diffKey = `${edge.direction},${connectedEdge.direction}`;
-                        let angleDiff = directionDiffs.get(diffKey);
-                        if (angleDiff === undefined) {
-                            angleDiff = Math.abs(edge.direction - connectedEdge.direction);
-                            directionDiffs.set(diffKey, angleDiff);
-                        }
-                        
-                        if (angleDiff < directionThreshold || 
-                            angleDiff > Math.PI - directionThreshold) {
-                            segment.push(connectedEdge);
-                            visited.add(key);
-                        }
+        try {
+            const patterns = {
+                geometric: this.detectGeometricPatterns(points),
+                structural: this.analyzeStructuralPatterns(points),
+                spatial: this.analyzeSpatialDistribution(points)
+            };
+
+            return {
+                patterns,
+                confidence: this.calculatePatternConfidence(patterns),
+                metadata: {
+                    pointCount: points.length,
+                    bounds: this.getSegmentBounds(points),
+                    timestamp: Date.now()
+                }
+            };
+        } catch (error) {
+            console.error('WALL_MAKER_PATTERN_ANALYSIS_ERROR:', error);
+            return {
+                patterns: {},
+                confidence: 0,
+                metadata: {
+                    error: {
+                        code: 'WALL_MAKER_PATTERN_ANALYSIS_ERROR',
+                        message: error.message,
+                        timestamp: Date.now()
                     }
                 }
-            }
-            
-            // Only keep segments with sufficient length and strength
-            if (segment.length >= 3) {
-                const avgStrength = segment.reduce((sum, e) => sum + e.strength, 0) / segment.length;
-                if (avgStrength > adaptiveThreshold / 255) {
-                    processedEdges.push(...segment);
-                }
-            }
+            };
         }
-
-        return processedEdges;
     }
 
     static enhancePixel(gray, localHist, cumulativeHist, totalPixels) {
@@ -819,21 +629,6 @@ class WallMaker {
         }
         
         return filtered;
-    }
-
-    static analyzeAdvancedPatterns(points) {
-        return {
-            // Spatial distribution analysis
-            spatial: this.analyzeSpatialDistribution(points),
-            // Frequency analysis for repeating patterns
-            frequency: this.analyzeFrequencyPatterns(points),
-            // Geometric pattern detection
-            geometric: this.detectGeometricPatterns(points),
-            // Texture density analysis
-            density: this.analyzeTextureDensity(points),
-            // Scale-invariant feature analysis
-            features: this.analyzeScaleInvariantFeatures(points)
-        };
     }
 
     static getSegmentBounds(points) {
@@ -1157,43 +952,64 @@ class WallMaker {
     }
 
     static analyzeStructuralPatterns(segments) {
-        const structuralFeatures = {
-            walls: [],
-            corners: [],
-            intersections: [],
-            rooms: []
-        };
+        if (!segments || !Array.isArray(segments)) {
+            return {
+                primaryDirections: [],
+                groupedSegments: [],
+                junctions: new Map(),
+                rooms: [],
+                scoredSegments: []
+            };
+        }
 
-        // Find primary wall directions
-        const directions = this.findPrimaryDirections(segments);
-        
-        // Group segments by direction
-        const groupedSegments = this.groupSegmentsByDirection(segments, directions);
-        
-        // Detect corners and intersections
-        const junctions = this.detectJunctions(segments);
-        
-        // Analyze potential rooms
-        const rooms = this.detectRooms(segments, junctions);
-        
-        // Score segments based on structural importance
-        const scoredSegments = segments.map(segment => ({
-            ...segment,
-            structuralScore: this.calculateStructuralImportance(
-                segment,
+        try {
+            const structuralFeatures = {
+                walls: [],
+                corners: [],
+                intersections: [],
+                rooms: []
+            };
+
+            // Find primary wall directions
+            const directions = this.findPrimaryDirections(segments);
+            
+            // Group segments by direction
+            const groupedSegments = this.groupSegmentsByDirection(segments, directions);
+            
+            // Detect corners and intersections
+            const junctions = this.detectJunctions(segments);
+            
+            // Analyze potential rooms
+            const rooms = this.detectRooms(segments, junctions);
+            
+            // Score segments based on structural importance
+            const scoredSegments = segments.map(segment => ({
+                ...segment,
+                structuralScore: this.calculateStructuralImportance(
+                    segment,
+                    junctions,
+                    rooms,
+                    directions
+                )
+            }));
+
+            return {
+                primaryDirections: directions,
+                groupedSegments,
                 junctions,
                 rooms,
-                directions
-            )
-        }));
-
-        return {
-            primaryDirections: directions,
-            groupedSegments,
-            junctions,
-            rooms,
-            scoredSegments
-        };
+                scoredSegments
+            };
+        } catch (error) {
+            console.error('Error in structural pattern analysis:', error);
+            return {
+                primaryDirections: [],
+                groupedSegments: [],
+                junctions: new Map(),
+                rooms: [],
+                scoredSegments: []
+            };
+        }
     }
 
     static findPrimaryDirections(segments) {
@@ -1834,6 +1650,216 @@ class WallMaker {
             distanceVariance,
             angleVariance: this.calculateAngleVariance(angles)
         };
+    }
+
+    static isValidRoom(room) {
+        if (!room || !room.corners || room.corners.length < 3) return false;
+        
+        // Check if room is closed (first and last corners are the same)
+        if (room.corners[0] !== room.corners[room.corners.length - 1]) return false;
+        
+        // Check if room has a reasonable area
+        if (room.area < 100) return false; // Minimum area threshold
+        
+        // Check if room has reasonable proportions
+        const bounds = this.getSegmentBounds(room.corners.map(c => c.point));
+        const aspectRatio = bounds.width / bounds.height;
+        if (aspectRatio < 0.2 || aspectRatio > 5) return false;
+        
+        return true;
+    }
+
+    static findNextRoomConnection(currentJunction, previousSegment, room) {
+        if (!currentJunction || !currentJunction.segments) return null;
+        
+        const segments = Array.from(currentJunction.segments);
+        let bestSegment = null;
+        let bestJunction = null;
+        let minAngleDiff = Math.PI;
+        
+        for (const segment of segments) {
+            if (segment === previousSegment) continue;
+            
+            const otherJunction = this.getOtherJunction(segment, currentJunction);
+            if (!otherJunction) continue;
+            
+            const angleDiff = this.calculateAngleDifference(
+                previousSegment ? this.getSegmentAngle(previousSegment) : null,
+                this.getSegmentAngle(segment)
+            );
+            
+            if (angleDiff < minAngleDiff) {
+                minAngleDiff = angleDiff;
+                bestSegment = segment;
+                bestJunction = otherJunction;
+            }
+        }
+        
+        return bestSegment ? { segment: bestSegment, junction: bestJunction } : null;
+    }
+
+    static calculatePolygonArea(points) {
+        if (!points || points.length < 3) return 0;
+        
+        let area = 0;
+        for (let i = 0; i < points.length; i++) {
+            const j = (i + 1) % points.length;
+            area += points[i].x * points[j].y;
+            area -= points[j].x * points[i].y;
+        }
+        
+        return Math.abs(area) / 2;
+    }
+
+    static groupSegmentsByDirection(segments, directions) {
+        if (!segments || !directions || directions.length === 0) return [];
+        
+        const grouped = directions.map(() => []);
+        const angleThreshold = Math.PI / 16; // 11.25 degrees
+        
+        for (const segment of segments) {
+            const angle = this.calculateSegmentAngle(segment);
+            
+            // Find closest direction
+            let minDiff = Math.PI;
+            let bestIndex = 0;
+            
+            for (let i = 0; i < directions.length; i++) {
+                const diff = this.calculateAngleDifference(angle, directions[i]);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    bestIndex = i;
+                }
+            }
+            
+            if (minDiff < angleThreshold) {
+                grouped[bestIndex].push(segment);
+            }
+        }
+        
+        return grouped;
+    }
+
+    static getOtherJunction(segment, junction) {
+        if (!segment || !junction) {
+            console.warn('WALL_MAKER_INVALID_JUNCTION: Invalid segment or junction provided');
+            return null;
+        }
+        return segment.junction1 === junction ? segment.junction2 : segment.junction1;
+    }
+
+    static getSegmentAngle(segment) {
+        if (!segment || !segment.points || segment.points.length < 2) {
+            console.warn('WALL_MAKER_INVALID_SEGMENT: Invalid segment provided for angle calculation');
+            return 0;
+        }
+        const dx = segment.points[1].x - segment.points[0].x;
+        const dy = segment.points[1].y - segment.points[0].y;
+        return Math.atan2(dy, dx);
+    }
+
+    static calculateAngleDifference(angle1, angle2) {
+        if (angle1 === null) return 0;
+        let diff = Math.abs(angle1 - angle2);
+        return Math.min(diff, Math.PI * 2 - diff);
+    }
+
+    static calculatePatternConfidence(patterns) {
+        if (!patterns) return 0;
+        
+        let confidence = 0;
+        let weight = 0;
+        
+        // Geometric pattern confidence
+        if (patterns.geometric) {
+            const { lines, rectangles, regularShapes } = patterns.geometric;
+            const geometricConfidence = (
+                (lines?.length || 0) * 0.4 +
+                (rectangles?.length || 0) * 0.3 +
+                (regularShapes?.length || 0) * 0.3
+            ) / Math.max(1, lines?.length + rectangles?.length + regularShapes?.length);
+            confidence += geometricConfidence * 0.4;
+            weight += 0.4;
+        }
+        
+        // Structural pattern confidence
+        if (patterns.structural) {
+            const { scoredSegments, rooms } = patterns.structural;
+            const structuralConfidence = (
+                scoredSegments?.reduce((sum, s) => sum + s.structuralScore, 0) / Math.max(1, scoredSegments?.length) * 0.6 +
+                (rooms?.length || 0) * 0.4
+            );
+            confidence += structuralConfidence * 0.4;
+            weight += 0.4;
+        }
+        
+        // Spatial pattern confidence
+        if (patterns.spatial) {
+            const { uniformity, density, clustering } = patterns.spatial;
+            const spatialConfidence = (
+                (uniformity || 0) * 0.4 +
+                (density || 0) * 0.3 +
+                (clustering?.density || 0) * 0.3
+            );
+            confidence += spatialConfidence * 0.2;
+            weight += 0.2;
+        }
+        
+        return weight > 0 ? confidence / weight : 0;
+    }
+
+    static isTexturePattern(patternFeatures) {
+        if (!patternFeatures) return false;
+        
+        const { patterns, frequencies, periodicity } = patternFeatures;
+        
+        // Check for high frequency patterns
+        const hasHighFrequency = Array.from(frequencies.values())
+            .some(count => count > patterns.size * 0.3);
+        
+        // Check for regular periodicity
+        const hasRegularPeriodicity = periodicity > 0.7;
+        
+        // Check for uniform distribution
+        const hasUniformDistribution = this.calculateDistributionUniformity(patternFeatures) > 0.6;
+        
+        return hasHighFrequency || hasRegularPeriodicity || hasUniformDistribution;
+    }
+
+    static calculateShapeRegularity(angles) {
+        if (!angles || angles.length < 2) return 0;
+        
+        // Calculate expected angle between points
+        const expectedAngle = (Math.PI * 2) / angles.length;
+        
+        // Calculate angle differences
+        const differences = angles.map((angle, i) => {
+            const nextAngle = angles[(i + 1) % angles.length];
+            return Math.abs(nextAngle - angle - expectedAngle);
+        });
+        
+        // Calculate regularity score
+        const maxDifference = Math.PI / 4; // 45 degrees
+        const regularity = differences.reduce((sum, diff) => 
+            sum + (1 - Math.min(diff, maxDifference) / maxDifference), 0) / differences.length;
+        
+        return regularity;
+    }
+
+    static findDominantFrequencies(frequencies) {
+        if (!frequencies || frequencies.size === 0) return [];
+        
+        // Convert to array and sort by frequency
+        const sortedFrequencies = Array.from(frequencies.entries())
+            .sort((a, b) => b[1] - a[1]);
+        
+        // Find significant frequencies (more than 20% of max frequency)
+        const maxFrequency = sortedFrequencies[0][1];
+        const threshold = maxFrequency * 0.2;
+        
+        return sortedFrequencies
+            .filter(([_, count]) => count >= threshold)
+            .map(([distance]) => distance);
     }
 }
 
