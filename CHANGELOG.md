@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.6] - 2024-04-18
+### Added
+- Enhanced edge detection with lookup table optimization for contrast enhancement
+- Implemented direction difference caching for improved performance
+- Added memory optimizations using typed arrays
+- Improved edge detection accuracy with better noise reduction
+- Optimized chunk-based processing for large scenes
+- Enhanced V12 compatibility and performance
+
+### Fixed
+- Improved contrast handling in dark scenes
+- Enhanced edge strength calculation accuracy
+- Better handling of isolated edges
+- Optimized memory usage during edge detection
+- Improved edge direction similarity detection
+
 ## [1.0.5] - 2024-04-18
 ### Added
 - Enhanced edge detection with improved WebGL shader error handling
